@@ -1,0 +1,53 @@
+x-graphify-env: &graphify-env
+  PYTHONUNBUFFERED: "1"
+
+x-graphify-common: &graphify-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    <<: *graphify-env
+  volumes:
+    # Mount the corpus as the working directory. The original graphify CLI
+    # writes graphify-out/ next to the scanned path, so this must be writable.
+    - ./data:/workspace
+
+services:
+  neo4j:
+    image: neo4j:5.22.0-community
+    environment:
+      # Username is always neo4j; password is set via NEO4J_AUTH.
+      NEO4J_AUTH: neo4j/graphify
+      # Also expose the password as an env var so the healthcheck can use it.
+      NEO4J_PASSWORD: graphify
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      # Use $$ so Compose passes $NEO4J_PASSWORD into the container instead of
+      # substituting it from the host shell.
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_PASSWORD}\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # CLI helper. This intentionally has no depends_on, so commands like
+  # `docker compose run --rm graphify --help` never wait for Neo4j.
+  graphify:
+    image: marcellodesales/graphify
+    <<: *graphify-common
+    profiles:
+      - cli
+
+  # Long-running service mode using the original graphify CLI. Use:
+  #   docker compose up --build graphify-service
+  graphify-service:
+    <<: *graphify-common
+    environment:
+      <<: *graphify-env
+    command: ["watch", "."]
+
+volumes:
+  neo4j_data:
