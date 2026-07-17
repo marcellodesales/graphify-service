@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # graphify MCP server as a shared HTTP service (issue #1143).
 #
 # Build:  docker build -t graphify .
@@ -7,19 +9,51 @@
 # Builds from source so the image includes the Streamable HTTP transport even
 # before it lands on PyPI. The graph.json is mounted at runtime (-v), never
 # baked into the image.
-FROM python:3.12-slim
+
+# Multi-stage build: compile/install deps in a builder image, copy a venv into a slim runtime image.
+
+FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/venv
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 WORKDIR /app
-COPY . /app
 
-# The [mcp] extra pulls mcp + starlette + uvicorn, which the HTTP transport needs.
-RUN pip install --no-cache-dir ".[mcp]"
+# Copy only what we need to install the package (keeps build cache effective)
+COPY pyproject.toml README.md LICENSE /app/
+COPY graphify /app/graphify
 
-# Run as a non-root user — the server is network-exposed.
-RUN useradd --create-home --uid 10001 graphify
-USER graphify
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install ".[neo4j,watch]"
 
-EXPOSE 8080
 
-ENTRYPOINT ["python", "-m", "graphify.serve"]
-CMD ["/data/graph.json", "--transport", "http", "--host", "0.0.0.0", "--port", "8080"]
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Non-root runtime user
+RUN addgroup --gid 10001 app \
+    && adduser --uid 10001 --gid 10001 --disabled-password --gecos "" app
+
+USER app
+WORKDIR /workspace
+
+# CLI entrypoint: use the original graphify console script so every
+# first-party subcommand remains available in the container.
+ENTRYPOINT ["graphify"]
+CMD ["--help"]

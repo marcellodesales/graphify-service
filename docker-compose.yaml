@@ -1,0 +1,60 @@
+x-graphify-env: &graphify-env
+  PYTHONUNBUFFERED: "1"
+
+x-graphify-common: &graphify-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    <<: *graphify-env
+  volumes:
+    # Mount the corpus as the working directory. The original graphify CLI
+    # writes graphify-out/ next to the scanned path, so this must be writable.
+    - ./data:/workspace
+
+services:
+  neo4j:
+    image: neo4j:5.22.0-community
+    environment:
+      # Username is always neo4j; password is set via NEO4J_AUTH.
+      NEO4J_AUTH: neo4j/graphify
+      # Also expose the password as an env var so the healthcheck can use it.
+      NEO4J_PASSWORD: graphify
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      # Use $$ so Compose passes $NEO4J_PASSWORD into the container instead of
+      # substituting it from the host shell.
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_PASSWORD}\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Published CLI image (marcellodesales/graphify) and the CI/CD build target.
+  #
+  # NOTE: no `profiles:` here on purpose. The multi-arch CI/CD workflow discovers
+  # the build target with `docker compose config --services`, which omits any
+  # service behind a profile — so a profiled service can never be selected as
+  # `docker-compose-target-service`. Keeping this service profile-less is what
+  # makes `target-service: graphify` resolvable in CI.
+  #
+  # It has no depends_on, so `docker compose run --rm graphify --help` never
+  # waits for Neo4j. Its ENTRYPOINT is `graphify` with a default of `--help`, so
+  # on a bare `docker compose up` it runs once and exits 0 (no restart policy).
+  graphify:
+    image: marcellodesales/graphify
+    <<: *graphify-common
+
+  # Long-running service mode using the original graphify CLI. Use:
+  #   docker compose up --build graphify-service
+  graphify-service:
+    <<: *graphify-common
+    environment:
+      <<: *graphify-env
+    command: ["watch", "."]
+
+volumes:
+  neo4j_data:
