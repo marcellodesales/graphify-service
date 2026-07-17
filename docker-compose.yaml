@@ -33,13 +33,20 @@ services:
       timeout: 5s
       retries: 30
 
-  # CLI helper. This intentionally has no depends_on, so commands like
-  # `docker compose run --rm graphify --help` never wait for Neo4j.
+  # Published CLI image (marcellodesales/graphify) and the CI/CD build target.
+  #
+  # NOTE: no `profiles:` here on purpose. The multi-arch CI/CD workflow discovers
+  # the build target with `docker compose config --services`, which omits any
+  # service behind a profile — so a profiled service can never be selected as
+  # `docker-compose-target-service`. Keeping this service profile-less is what
+  # makes `target-service: graphify` resolvable in CI.
+  #
+  # It has no depends_on, so `docker compose run --rm graphify --help` never
+  # waits for Neo4j. Its ENTRYPOINT is `graphify` with a default of `--help`, so
+  # on a bare `docker compose up` it runs once and exits 0 (no restart policy).
   graphify:
     image: marcellodesales/graphify
     <<: *graphify-common
-    profiles:
-      - cli
 
   # Long-running service mode using the original graphify CLI. Use:
   #   docker compose up --build graphify-service
