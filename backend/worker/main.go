@@ -88,8 +88,11 @@ func (w *worker) handle(data events.RepoEventData) error {
 	id := data.RepositoryID
 	m, err := w.store.Get(id)
 	if err != nil {
-		w.logger.Error("graphify: metadata not found", "id", id, "error", err)
-		return nil
+		w.logger.Error("graphify: metadata read failed", "id", id, "error", err)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil // ack to avoid poison loop
+		}
+		return err // nak to retry transient errors
 	}
 	if m.Status == repository.StatusReady {
 		return nil // duplicate
