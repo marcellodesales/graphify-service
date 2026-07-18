@@ -1,0 +1,36 @@
+name: 🧪 integration (bruno T1)
+run-name: 🧪 integration — PR ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+
+# End-to-end async pipeline test (PRD-005 T1): submit a live public repo, poll
+# to ready, download the zip, and run the Bruno HTTP assertions. Separate from
+# the image-build workflows.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/integration.yml'
+      - 'backend/**'
+      - 'tests/**'
+      - 'docker-compose*'
+      - 'Dockerfile'
+  workflow_dispatch:
+
+jobs:
+  bruno-t1:
+    name: submit → poll → download
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node (Bruno CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Bruno CLI
+        run: npm install -g @usebruno/cli
+
+      - name: Run integration test
+        run: bash tests/integration/run.sh

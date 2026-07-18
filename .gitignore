@@ -40,3 +40,7 @@ paper/
 
 # macOS Finder metadata
 .DS_Store
+
+# graphify-service local pipeline data (bind mount)
+data/repos/
+data/

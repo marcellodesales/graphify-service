@@ -1,0 +1,18 @@
+meta {
+  name: Worker reports status for the reference (T2)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrlWorker}}/status/{{refId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.service: eq worker
+  res.body.id: eq {{refId}}
+  res.body.phase: eq ready
+}

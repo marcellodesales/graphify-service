@@ -26,13 +26,16 @@ type Metadata struct {
 
 // Source captures the non-secret human-readable origin of a repository.
 type Source struct {
-	NormalizedURL string `json:"normalizedUrl"`
-	Host          string `json:"host"`
-	OwnerPath     string `json:"ownerPath"`
-	Repository    string `json:"repository"`
-	Transport     string `json:"transport"`
-	Private       bool   `json:"private"`
-	SSHKeyRef     string `json:"sshKeyRef,omitempty"`
+	NormalizedURL     string `json:"normalizedUrl"`
+	Host              string `json:"host"`
+	OwnerPath         string `json:"ownerPath"`
+	Repository        string `json:"repository"`
+	Transport         string `json:"transport"`
+	Private           bool   `json:"private"`
+	SSHKeyRef         string `json:"sshKeyRef,omitempty"`
+	DefaultBranch     string `json:"defaultBranch,omitempty"`     // resolved at clone time
+	HasCommittedGraph bool   `json:"hasCommittedGraph,omitempty"` // repo already contains graphify-out/
+	GraphOutPath      string `json:"graphOutPath,omitempty"`      // relative, e.g. graphify-out
 }
 
 // Attempts counts how many times each stage has run.

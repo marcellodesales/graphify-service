@@ -1,0 +1,24 @@
+meta {
+  name: Cloner reports status for the reference (T2)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrlCloner}}/status/{{refId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.service: eq cloner
+  res.body.id: eq {{refId}}
+}
+
+tests {
+  test("cloner knows the reference and reports a terminal-or-progress phase", function () {
+    const phase = res.getBody().phase;
+    expect(["cloned", "graphifying", "ready"]).to.include(phase);
+  });
+}

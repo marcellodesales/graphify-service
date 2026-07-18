@@ -1,0 +1,26 @@
+meta {
+  name: Download graph as zip
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/v1/repositories/{{refId}}/download?format=zip
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("content-type is a zip", function () {
+    expect(res.getHeader("content-type")).to.match(/application\/zip/);
+  });
+  test("body is a non-empty archive", function () {
+    // Bruno exposes the raw body; assert it is not empty.
+    const len = Number(res.getHeader("content-length") || 0);
+    expect(len === 0 ? (res.getBody() ? 1 : 0) : len).to.be.greaterThan(0);
+  });
+}

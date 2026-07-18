@@ -83,12 +83,13 @@ services:
     build:
       context: ./backend
       dockerfile: cloner/Dockerfile
-    # Phase 2 placeholder today: exits after logging. No restart loop.
-    restart: "no"
+    restart: unless-stopped
+    ports:
+      - "${GRAPHIFY_CLONER_PORT:-8081}:8080" # /status/{id}, /healthz, /readyz
     environment:
       GRAPHIFY_REPOS_ROOT: /graphify-service/repos
       GRAPHIFY_SSH_ROOT: /run/secrets/graphify-ssh
-      GRAPHIFY_KNOWN_HOSTS: /run/secrets/graphify-ssh/known_hosts
+      GRAPHIFY_KNOWN_HOSTS: ${GRAPHIFY_KNOWN_HOSTS:-}
       GRAPHIFY_LOG_LEVEL: ${GRAPHIFY_LOG_LEVEL:-info}
       NATS_URL: nats://nats:4222
     volumes:
@@ -109,10 +110,12 @@ services:
       dockerfile: worker/Dockerfile
       args:
         GRAPHIFY_IMAGE: ${GRAPHIFY_IMAGE:-marcellodesales/graphify:latest}
-    # Phase 3 placeholder today: exits after logging. No restart loop.
-    restart: "no"
+    restart: unless-stopped
+    ports:
+      - "${GRAPHIFY_WORKER_PORT:-8082}:8080" # /status/{id}, /healthz, /readyz
     environment:
       GRAPHIFY_REPOS_ROOT: /graphify-service/repos
+      GRAPHIFY_CODE_ONLY: ${GRAPHIFY_CODE_ONLY:-true} # local AST, no LLM key
       GRAPHIFY_LOG_LEVEL: ${GRAPHIFY_LOG_LEVEL:-info}
       NATS_URL: nats://nats:4222
     volumes:

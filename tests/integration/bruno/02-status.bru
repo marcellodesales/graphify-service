@@ -1,0 +1,28 @@
+meta {
+  name: Repository status is ready
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/repositories/{{refId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.id: eq {{refId}}
+  res.body.status: eq ready
+}
+
+tests {
+  test("resolvedSha is a non-empty commit id", function () {
+    expect(res.getBody().resolvedSha).to.be.a("string").and.to.have.length.greaterThan(6);
+  });
+  test("links expose artifacts + download", function () {
+    const l = res.getBody().links;
+    expect(l.artifacts).to.match(/\/artifacts$/);
+    expect(l.downloadZip).to.match(/download\?format=zip$/);
+  });
+}

@@ -94,6 +94,30 @@ func (s *Store) Get(id string) (Metadata, error) {
 	return s.readUnlocked(id)
 }
 
+// Update applies mutate to the current metadata for id and persists it
+// atomically under the per-id lock. It bumps UpdatedAt. Returns the new record.
+func (s *Store) Update(id string, mutate func(*Metadata) error) (Metadata, error) {
+	if !ValidID(id) {
+		return Metadata{}, ErrNotFound
+	}
+	lock := s.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	m, err := s.readUnlocked(id)
+	if err != nil {
+		return Metadata{}, err
+	}
+	if err := mutate(&m); err != nil {
+		return Metadata{}, err
+	}
+	m.Timestamps.UpdatedAt = time.Now().UTC()
+	if err := s.writeAtomic(m); err != nil {
+		return Metadata{}, err
+	}
+	return m, nil
+}
+
 // ListFilter narrows and pages a List call.
 type ListFilter struct {
 	Status Status // optional

@@ -23,7 +23,7 @@ func testServer(t *testing.T, cfg config.Config) *Server {
 		t.Fatalf("store: %v", err)
 	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return NewServer(cfg, store, logger)
+	return NewServer(cfg, store, logger, nil)
 }
 
 func doJSON(t *testing.T, h http.Handler, method, path, body string, hdr map[string]string) *httptest.ResponseRecorder {
