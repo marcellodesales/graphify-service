@@ -47,3 +47,7 @@ data/
 
 # integration test materialized artifacts (resources dir)
 tests/integration/output/
+
+# Keep the artifacts test fixture (lives under a graphify-out/ dir)
+!backend/internal/artifacts/testdata/repo/graphify-out/
+!backend/internal/artifacts/testdata/repo/graphify-out/**
