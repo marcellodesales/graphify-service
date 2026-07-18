@@ -1,3 +1,22 @@
+####
+#### Graphify-as-a-Service — full local stack.
+####
+#### Quickstart (Go control plane + async backbone):
+####   docker compose up --build graphify-api
+####   # → REST API on http://localhost:8080  (POST /api/v1/repositories, GET /healthz)
+####
+#### Full backend (api + workers + NATS):
+####   docker compose build graphify          # build the graphify base image first
+####   docker compose up --build              # nats, graphify-api, graphify-cloner, graphify-worker
+####
+#### Notes:
+####   - graphify-worker is built FROM the graphify image (marcellodesales/graphify),
+####     which ships the `graphify` binary. Run `docker compose build graphify` first.
+####   - graphify-cloner / graphify-worker are Phase 2/3 placeholders today: they log
+####     their intent and exit (restart: "no"). The graphify-api is the working Phase 1 service.
+####   - neo4j is optional: `docker compose --profile neo4j up neo4j`.
+####
+
 x-graphify-env: &graphify-env
   PYTHONUNBUFFERED: "1"
 
@@ -13,48 +32,126 @@ x-graphify-common: &graphify-common
     - ./data:/workspace
 
 services:
-  neo4j:
-    image: neo4j:5.22.0-community
-    environment:
-      # Username is always neo4j; password is set via NEO4J_AUTH.
-      NEO4J_AUTH: neo4j/graphify
-      # Also expose the password as an env var so the healthcheck can use it.
-      NEO4J_PASSWORD: graphify
+  # ── Async backbone: NATS JetStream (spec §8) ───────────────────────────────
+  nats:
+    image: nats:2-alpine
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "${NATS_CLIENT_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
     volumes:
-      - neo4j_data:/data
+      - nats_data:/data
+    restart: unless-stopped
     healthcheck:
-      # Use $$ so Compose passes $NEO4J_PASSWORD into the container instead of
-      # substituting it from the host shell.
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_PASSWORD}\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-  # Published CLI image (marcellodesales/graphify) and the CI/CD build target.
-  #
-  # NOTE: no `profiles:` here on purpose. The multi-arch CI/CD workflow discovers
-  # the build target with `docker compose config --services`, which omits any
-  # service behind a profile — so a profiled service can never be selected as
-  # `docker-compose-target-service`. Keeping this service profile-less is what
-  # makes `target-service: graphify` resolvable in CI.
-  #
-  # It has no depends_on, so `docker compose run --rm graphify --help` never
-  # waits for Neo4j. Its ENTRYPOINT is `graphify` with a default of `--help`, so
-  # on a bare `docker compose up` it runs once and exits 0 (no restart policy).
+  # ── Go control plane: REST + MCP API (spec §6, §12) ────────────────────────
+  # CI build target for docker-multiarch-cicd-backend.yaml.
+  graphify-api:
+    # Monorepo image naming: <owner>/<repo>/<service> subpath so the multiple
+    # images published from this one repo never clobber each other (see the
+    # vionix-docker-cicd skill). GHCR supports multi-segment names.
+    image: marcellodesales/graphify-service/api
+    build:
+      context: ./backend
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${GRAPHIFY_API_PORT:-8080}:8080"
+    environment:
+      GRAPHIFY_ENV: ${GRAPHIFY_ENV:-development}
+      GRAPHIFY_HTTP_ADDR: ":8080"
+      GRAPHIFY_REPOS_ROOT: /graphify-service/repos
+      GRAPHIFY_AUTH_MODE: ${GRAPHIFY_AUTH_MODE:-none}
+      GRAPHIFY_API_TOKEN: ${GRAPHIFY_API_TOKEN:-}
+      GRAPHIFY_LOG_LEVEL: ${GRAPHIFY_LOG_LEVEL:-info}
+      NATS_URL: nats://nats:4222
+    volumes:
+      - ./data/repos:/graphify-service/repos
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  # ── Clone worker: secure shallow/SHA-only git clones (spec §9) ─────────────
+  # CI build target for docker-multiarch-cicd-cloner.yaml.
+  graphify-cloner:
+    image: marcellodesales/graphify-service/cloner
+    build:
+      context: ./backend
+      dockerfile: cloner/Dockerfile
+    # Phase 2 placeholder today: exits after logging. No restart loop.
+    restart: "no"
+    environment:
+      GRAPHIFY_REPOS_ROOT: /graphify-service/repos
+      GRAPHIFY_SSH_ROOT: /run/secrets/graphify-ssh
+      GRAPHIFY_KNOWN_HOSTS: /run/secrets/graphify-ssh/known_hosts
+      GRAPHIFY_LOG_LEVEL: ${GRAPHIFY_LOG_LEVEL:-info}
+      NATS_URL: nats://nats:4222
+    volumes:
+      - ./data/repos:/graphify-service/repos
+      # Read-only SSH deploy keys (spec §10). Directory may be empty locally.
+      - ./secrets/ssh:/run/secrets/graphify-ssh:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  # ── Graphify worker: runs `graphify extract` (spec §11) ────────────────────
+  # CI build target for docker-multiarch-cicd-worker.yaml.
+  # Built FROM the graphify image so the `graphify` binary is on PATH.
+  graphify-worker:
+    image: marcellodesales/graphify-service/worker
+    build:
+      context: ./backend
+      dockerfile: worker/Dockerfile
+      args:
+        GRAPHIFY_IMAGE: ${GRAPHIFY_IMAGE:-marcellodesales/graphify:latest}
+    # Phase 3 placeholder today: exits after logging. No restart loop.
+    restart: "no"
+    environment:
+      GRAPHIFY_REPOS_ROOT: /graphify-service/repos
+      GRAPHIFY_LOG_LEVEL: ${GRAPHIFY_LOG_LEVEL:-info}
+      NATS_URL: nats://nats:4222
+    volumes:
+      - ./data/repos:/graphify-service/repos
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  # ── Published graphify CLI image (marcellodesales/graphify). ───────────────
+  # Existing CI build target for docker-multiarch-cicd.yaml — keep unprofiled so
+  # `docker compose config --services` can discover it (see the vionix skill).
   graphify:
     image: marcellodesales/graphify
     <<: *graphify-common
 
-  # Long-running service mode using the original graphify CLI. Use:
-  #   docker compose up --build graphify-service
+  # Long-running graphify CLI in watch mode: docker compose up graphify-service
   graphify-service:
     <<: *graphify-common
     environment:
       <<: *graphify-env
     command: ["watch", "."]
 
+  # ── Optional graph database (opt-in via --profile neo4j) ───────────────────
+  neo4j:
+    image: neo4j:5.22.0-community
+    profiles: ["neo4j"]
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/graphify}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-graphify}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_PASSWORD}\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
 volumes:
   neo4j_data:
+  nats_data:

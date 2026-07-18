@@ -1,15 +1,38 @@
 name: 🐳 docker-multiarch-cicd
 run-name: 🐳 Docker Multi-Arch CICD PR ${{ github.event.pull_request.number }} commit ${{ github.event.pull_request.head.sha }}
 
+# Builds the Python graphify CLI image (target service: graphify). Path-filtered
+# to the Python engine + its build inputs so Go-only backend changes don't
+# rebuild it. See the "vionix-docker-cicd" skill for the one-image-per-repo rule.
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
+    # Python engine only. Deliberately NOT triggered by docker-compose*/backend
+    # changes (nor by edits to this workflow file) so Go-backend work never
+    # rebuilds the Python graphify image.
+    paths:
+      - 'graphify/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'pytest.ini'
+      - '**.py'
+      - 'Dockerfile'
   push:
     branches:
       - main
       - develop
     tags:
       - 'v*'
+    # Python engine only. Deliberately NOT triggered by docker-compose*/backend
+    # changes (nor by edits to this workflow file) so Go-backend work never
+    # rebuilds the Python graphify image.
+    paths:
+      - 'graphify/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'pytest.ini'
+      - '**.py'
+      - 'Dockerfile'
 
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
