@@ -89,13 +89,23 @@ func (w *worker) handle(data events.RepoEventData) error {
 	id := data.RepositoryID
 	m, err := w.store.Get(id)
 	if err != nil {
-		w.logger.Error("clone: metadata not found", "id", id, "error", err)
-		return nil // ack to avoid poison loop
+		w.logger.Error("clone: metadata read failed", "id", id, "error", err)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil // poison message — ack to avoid a redelivery loop
+		}
+		return err // transient (disk/lock) — nak to retry
 	}
 
-	// Idempotency: already past cloning → ack duplicate.
+	// Idempotency on redelivery. If we already reached 'cloned' but the cloned
+	// event's publish/ack didn't land, re-publish it (idempotent via Nats-Msg-Id)
+	// so the graph worker is still triggered; otherwise the pipeline can stall.
 	switch m.Status {
-	case repository.StatusCloned, repository.StatusGraphifying, repository.StatusReady:
+	case repository.StatusCloned:
+		return w.bus.Publish(events.SubjectCloned, "repository-cloned:"+id+":"+m.ResolvedSHA, events.RepoEventData{
+			RepositoryID: id,
+			ResolvedSHA:  m.ResolvedSHA,
+		})
+	case repository.StatusGraphifying, repository.StatusReady:
 		return nil
 	}
 

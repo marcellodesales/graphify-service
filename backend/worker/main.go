@@ -95,7 +95,10 @@ func (w *worker) handle(data events.RepoEventData) error {
 		return err // nak to retry transient errors
 	}
 	if m.Status == repository.StatusReady {
-		return nil // duplicate
+		// Already done. Re-publish in case the previous ready publish didn't land
+		// before ack (idempotent via Nats-Msg-Id) so pollers/consumers still see it.
+		return w.bus.Publish(events.SubjectGraphReady, "graph-ready:"+id+":"+m.ResolvedSHA,
+			events.RepoEventData{RepositoryID: id, ResolvedSHA: m.ResolvedSHA})
 	}
 	if m.Status != repository.StatusCloned && m.Status != repository.StatusGraphifying {
 		// cloned event but metadata isn't cloned yet — retry shortly.
