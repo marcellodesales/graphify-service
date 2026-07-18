@@ -28,6 +28,13 @@ trap cleanup EXIT
 # `failed` record would be returned idempotently instead of re-running.
 rm -rf "$ROOT/data/repos" 2>/dev/null || true
 
+# The containers run as a non-root uid (10001). On Linux CI the bind-mounted
+# host dir is owned by the runner, so the containers would get EACCES writing to
+# /graphify-service/repos (API /readyz stays 503). Pre-create it world-writable.
+# (On Docker Desktop for Mac this is a no-op — ownership is already mapped.)
+mkdir -p "$ROOT/data/repos"
+chmod -R 0777 "$ROOT/data" 2>/dev/null || true
+
 echo "==> build graphify base (fresh source — provides 'graphify extract')"
 "${COMPOSE[@]}" build graphify
 
