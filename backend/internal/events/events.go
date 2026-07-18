@@ -139,7 +139,7 @@ type Handler func(RepoEventData) error
 
 // Subscribe creates (or binds) a durable push consumer on subject and invokes
 // handler for each message with explicit ack.
-func (b *Bus) Subscribe(subject, durable string, handler Handler) (*nats.Subscription, error) {
+func (b *Bus) Subscribe(subject, durable string, ackWait time.Duration, handler Handler) (*nats.Subscription, error) {
 	sub, err := b.js.Subscribe(subject, func(m *nats.Msg) {
 		var ev CloudEvent
 		if err := json.Unmarshal(m.Data, &ev); err != nil {
@@ -156,7 +156,7 @@ func (b *Bus) Subscribe(subject, durable string, handler Handler) (*nats.Subscri
 		nats.ManualAck(),
 		nats.AckExplicit(),
 		nats.DeliverAll(),
-		nats.AckWait(2*time.Minute),
+		nats.AckWait(ackWait),
 		nats.MaxDeliver(5),
 	)
 	if err != nil {
