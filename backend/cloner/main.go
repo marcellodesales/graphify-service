@@ -49,7 +49,7 @@ func run() error {
 	defer bus.Close()
 
 	w := &worker{cfg: cfg, logger: logger, store: store, bus: bus}
-	sub, err := bus.Subscribe(events.SubjectCloneRequested, events.DurableCloneWorker, w.handle)
+	sub, err := bus.Subscribe(events.SubjectCloneRequested, events.DurableCloneWorker, cfg.CloneTimeout+time.Minute, w.handle)
 	if err != nil {
 		return err
 	}
