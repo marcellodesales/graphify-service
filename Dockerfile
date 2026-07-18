@@ -39,6 +39,9 @@ COPY graphify /app/graphify
 #   svg (matplotlib) → SVG export;  leiden (graspologic) → better communities
 #   pdf,office,google,postgres → doc / Google-Workspace / DB-schema ingestion
 # Export formats graph.json/graph.html/GraphML/callflow-html are base (networkx).
+# NOTE: these extras pull native deps (grpcio, lxml, igraph, Pillow, psycopg) that
+# compile from source. On QEMU-emulated arm64 that exceeds the CI job timeout, so
+# the graphify image publishes amd64-only (see docker-multiarch-cicd.yaml).
 RUN pip install --upgrade pip setuptools wheel \
     && pip install ".[mcp,neo4j,watch,svg,leiden,pdf,office,google,postgres]" uvicorn
 

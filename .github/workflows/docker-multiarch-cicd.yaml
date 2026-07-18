@@ -65,7 +65,12 @@ jobs:
       pull-requests: write      # Write back to the Pull Request
     with:
       registry: ghcr.io
-      platforms: linux/amd64,linux/arm64
+      # amd64-only: the curated extras (leiden/pdf/office/google/postgres) compile
+      # heavy native deps (grpcio, lxml, igraph, Pillow, psycopg) from source, and
+      # under QEMU-emulated arm64 that blows past the reusable workflow's job
+      # timeout. Go backend images keep arm64 (cheap cross-compile); re-add arm64
+      # here once prebuilt arm64 wheels are available or the timeout is raised.
+      platforms: linux/amd64
       docker-compose-target-service: graphify
       docker-compose-file-name: docker-compose.yaml
       dockerhub-registry: docker.io
