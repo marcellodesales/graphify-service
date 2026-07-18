@@ -42,6 +42,7 @@ type Config struct {
 	CodeOnly        bool          // GRAPHIFY_CODE_ONLY (graphify extract --code-only)
 	SSHRoot         string        // GRAPHIFY_SSH_ROOT
 	KnownHosts      string        // GRAPHIFY_KNOWN_HOSTS
+	MCPURL          string        // GRAPHIFY_MCP_URL (graphify-mcp Streamable HTTP endpoint)
 }
 
 // Load reads configuration from the environment, applies defaults, and validates.
@@ -59,6 +60,7 @@ func Load() (Config, error) {
 		CodeOnly:        getbool("GRAPHIFY_CODE_ONLY", true),
 		SSHRoot:         getenv("GRAPHIFY_SSH_ROOT", "/run/secrets/graphify-ssh"),
 		KnownHosts:      os.Getenv("GRAPHIFY_KNOWN_HOSTS"),
+		MCPURL:          getenv("GRAPHIFY_MCP_URL", "http://graphify-mcp:8080/mcp"),
 	}
 
 	var err error

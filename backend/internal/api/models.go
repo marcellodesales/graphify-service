@@ -38,6 +38,21 @@ type listResponse struct {
 	NextCursor   *string          `json:"nextCursor"`
 }
 
+// queryRequest is the POST /api/v1/repositories/{id}/query body (PRD-004).
+type queryRequest struct {
+	Question string `json:"question"`
+	Tool     string `json:"tool"` // optional; default query_graph
+}
+
+// queryResponse is the answer from the graphify-mcp composition.
+type queryResponse struct {
+	ID       string `json:"id"`
+	Tool     string `json:"tool"`
+	Question string `json:"question,omitempty"`
+	Answer   string `json:"answer"`
+	IsError  bool   `json:"isError"`
+}
+
 // errorResponse is the standard error envelope (spec §6.1).
 type errorResponse struct {
 	Error errorBody `json:"error"`

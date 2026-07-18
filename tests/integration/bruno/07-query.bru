@@ -1,0 +1,36 @@
+meta {
+  name: Query the repository graph (MCP composition)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/api/v1/repositories/{{refId}}/query
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "question": "main"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.isError: eq false
+  res.body.tool: eq query_graph
+}
+
+tests {
+  test("answer is a non-empty string", function () {
+    expect(res.getBody().answer).to.be.a("string").and.to.have.length.greaterThan(0);
+  });
+  test("answer is on-topic for the question (finds the main node)", function () {
+    expect(res.getBody().answer.toLowerCase()).to.include("main");
+  });
+}

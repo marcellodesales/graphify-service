@@ -70,6 +70,7 @@ services:
       GRAPHIFY_API_TOKEN: ${GRAPHIFY_API_TOKEN:-}
       GRAPHIFY_LOG_LEVEL: ${GRAPHIFY_LOG_LEVEL:-info}
       NATS_URL: nats://nats:4222
+      GRAPHIFY_MCP_URL: http://graphify-mcp:8080/mcp
     volumes:
       - ./data/repos:/graphify-service/repos
     depends_on:
@@ -123,6 +124,34 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+
+  # ── Graphify MCP query server (PRD-004) ────────────────────────────────────
+  # Serves graphify's query tools (query_graph, get_node, graph_stats, …) over
+  # Streamable HTTP for the whole shared repos volume. The API's /query endpoint
+  # composes with it, injecting project_path per repo. Stateless + json-response
+  # so a single stateless tools/call works (no session). Boots with a bogus graph
+  # path — real queries pass project_path. Reuses the graphify image (has mcp).
+  graphify-mcp:
+    image: marcellodesales/graphify
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["python", "-m", "graphify.serve"]
+    command:
+      - "--transport"
+      - "http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "--stateless"
+      - "--json-response"
+      - "/graphify-service/repos/.boot/graph.json"
+    restart: unless-stopped
+    ports:
+      - "${GRAPHIFY_MCP_PORT:-8083}:8080"
+    volumes:
+      - ./data/repos:/graphify-service/repos
 
   # ── Published graphify CLI image (marcellodesales/graphify). ───────────────
   # Existing CI build target for docker-multiarch-cicd.yaml — keep unprofiled so

@@ -14,6 +14,7 @@ KEEP="${KEEP_STACK:-0}"
 export GRAPHIFY_API_PORT="${GRAPHIFY_API_PORT:-18080}"
 export GRAPHIFY_CLONER_PORT="${GRAPHIFY_CLONER_PORT:-18081}"
 export GRAPHIFY_WORKER_PORT="${GRAPHIFY_WORKER_PORT:-18082}"
+export GRAPHIFY_MCP_PORT="${GRAPHIFY_MCP_PORT:-18083}"
 BASE="${BASE_URL:-http://localhost:${GRAPHIFY_API_PORT}}"
 
 cleanup() {
@@ -38,8 +39,8 @@ chmod -R 0777 "$ROOT/data" 2>/dev/null || true
 echo "==> build graphify base (fresh source — provides 'graphify extract')"
 "${COMPOSE[@]}" build graphify
 
-echo "==> build + start stack (nats, api, cloner, worker)"
-"${COMPOSE[@]}" up -d --build nats graphify-api graphify-cloner graphify-worker
+echo "==> build + start stack (nats, api, cloner, worker, mcp)"
+"${COMPOSE[@]}" up -d --build nats graphify-api graphify-cloner graphify-worker graphify-mcp
 
 echo "==> wait for API /readyz"
 for i in $(seq 1 60); do

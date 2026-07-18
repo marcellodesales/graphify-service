@@ -1,7 +1,11 @@
 # PRD-004 — MCP-against-repo composition & proxy
 
-**Requirement:** R8. **Status: documented, not built** (design to de-risk before
-implementation; second test level T3 depends on it).
+**Requirement:** R8. **Status: implemented (Option B).** A shared `graphify-mcp`
+service serves the graphify query tools over Streamable HTTP for the whole repos
+volume; the API's `POST /api/v1/repositories/{id}/query` composes with it,
+injecting `project_path` per repo (stateless `tools/call`, no session). Exercised
+by the integration suite (`tests/integration/bruno/07-query.bru`). A full MCP-
+client front (Bruno driving `/mcp` directly, spec §12) remains future work.
 
 ## Problem
 

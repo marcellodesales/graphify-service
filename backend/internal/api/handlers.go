@@ -14,6 +14,7 @@ import (
 	"github.com/marcellodesales/graphify-service/backend/internal/config"
 	"github.com/marcellodesales/graphify-service/backend/internal/events"
 	"github.com/marcellodesales/graphify-service/backend/internal/giturl"
+	"github.com/marcellodesales/graphify-service/backend/internal/mcpproxy"
 	"github.com/marcellodesales/graphify-service/backend/internal/repository"
 	"github.com/marcellodesales/graphify-service/backend/internal/statushttp"
 )
@@ -194,6 +195,68 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 // handleServiceStatus implements GET /status/{id} — the uniform status protocol.
 func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, statushttp.EnvelopeFor("api", s.store, r.PathValue("id")))
+}
+
+// handleQuery implements POST /api/v1/repositories/{id}/query (PRD-004): it
+// composes with the graphify-mcp server, injecting project_path for this repo,
+// so the caller can ask questions about a ready repo's graph.
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !repository.ValidID(id) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid repository id")
+		return
+	}
+	m, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "repository not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read repository")
+		return
+	}
+	if m.Status != repository.StatusReady {
+		writeError(w, r, http.StatusConflict, "not_ready", "repository is not ready (status: "+string(m.Status)+")")
+		return
+	}
+
+	var req queryRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "malformed JSON body: "+err.Error())
+		return
+	}
+	tool := strings.TrimSpace(req.Tool)
+	if tool == "" {
+		tool = "query_graph"
+	}
+	question := strings.TrimSpace(req.Question)
+	if tool == "query_graph" && question == "" {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "question is required for query_graph")
+		return
+	}
+
+	// Inject project_path so the shared graphify-mcp answers for THIS repo.
+	args := map[string]any{"project_path": s.store.Layout().RepositoryDir(id)}
+	if question != "" {
+		args["question"] = question
+	}
+
+	client := mcpproxy.New(s.cfg.MCPURL)
+	answer, isErr, err := client.CallTool(r.Context(), tool, args)
+	if err != nil {
+		s.logger.Error("query", "request_id", RequestIDFrom(r.Context()), "id", id, "tool", tool, "error", err)
+		writeError(w, r, http.StatusBadGateway, "query_backend_error", "graph query backend error")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, queryResponse{
+		ID:       id,
+		Tool:     tool,
+		Question: question,
+		Answer:   answer,
+		IsError:  isErr,
+	})
 }
 
 // handleList implements GET /api/v1/repositories (spec §6.3).

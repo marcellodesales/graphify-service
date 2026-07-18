@@ -21,6 +21,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repositories/{id}", s.protect(s.handleGet))
 	mux.HandleFunc("GET /api/v1/repositories/{id}/artifacts", s.protect(s.handleArtifacts))
 	mux.HandleFunc("GET /api/v1/repositories/{id}/download", s.protect(s.handleDownload))
+	mux.HandleFunc("POST /api/v1/repositories/{id}/query", s.protect(s.handleQuery))
 
 	var h http.Handler = mux
 	h = withBodyLimit(s.cfg.MaxRequestBytes, h)
