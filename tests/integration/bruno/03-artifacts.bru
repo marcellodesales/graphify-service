@@ -15,9 +15,11 @@ assert {
 }
 
 tests {
-  test("inventory contains graph.json", function () {
+  test("inventory contains the UI-ready formats", function () {
     const names = res.getBody().artifacts.map(function (a) { return a.name; });
-    expect(names).to.include("graph.json");
+    expect(names).to.include("graph.json");   // canonical queryable data
+    expect(names).to.include("graph.html");   // interactive viewer
+    expect(names).to.include("graph.graphml"); // Gephi/yEd/Cytoscape
   });
   test("no internal .graphify_* or .git files are exposed", function () {
     const names = res.getBody().artifacts.map(function (a) { return a.name; });

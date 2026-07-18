@@ -140,6 +140,8 @@ func MediaType(name string) string {
 		return "text/markdown; charset=utf-8"
 	case ".svg":
 		return "image/svg+xml"
+	case ".graphml":
+		return "application/graphml+xml"
 	case ".txt":
 		return "text/plain; charset=utf-8"
 	default:

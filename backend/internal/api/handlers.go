@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -190,6 +191,57 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("zip download", "request_id", RequestIDFrom(r.Context()), "id", id, "error", err)
 		// Headers/body may be partially written; nothing safe to add.
 	}
+}
+
+// handleArtifactFile serves a single allowlisted artifact for a ready repo
+// (PRD-003) so a UI can fetch graph.json / graph.html / graph.graphml directly.
+func (s *Server) handleArtifactFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !repository.ValidID(id) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid repository id")
+		return
+	}
+	m, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "repository not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read repository")
+		return
+	}
+	if m.Status != repository.StatusReady {
+		writeError(w, r, http.StatusConflict, "not_ready", "repository is not ready (status: "+string(m.Status)+")")
+		return
+	}
+	// Only names present in the (allowlisted) inventory are servable.
+	name := r.PathValue("name")
+	var art *repository.Artifact
+	for i := range m.Artifacts {
+		if m.Artifacts[i].Name == name {
+			art = &m.Artifacts[i]
+			break
+		}
+	}
+	if art == nil {
+		writeError(w, r, http.StatusNotFound, "not_found", "artifact not found")
+		return
+	}
+	full := filepath.Join(s.store.Layout().RepositoryDir(id), art.Path)
+	fi, err := os.Lstat(full)
+	if err != nil || !fi.Mode().IsRegular() { // refuse symlinks/dirs
+		writeError(w, r, http.StatusNotFound, "not_found", "artifact unavailable")
+		return
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to open artifact")
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", art.MediaType)
+	w.Header().Set("Content-Length", strconv.FormatInt(art.Size, 10))
+	_, _ = io.Copy(w, f)
 }
 
 // handleServiceStatus implements GET /status/{id} — the uniform status protocol.

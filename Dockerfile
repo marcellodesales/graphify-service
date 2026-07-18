@@ -33,10 +33,14 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE /app/
 COPY graphify /app/graphify
 
-# [mcp] adds the MCP server deps (mcp, starlette); uvicorn powers the HTTP
-# transport used by the graphify-mcp query service.
+# Curated extras for graphify-as-a-service:
+#   mcp,starlette + uvicorn → MCP query server (HTTP)
+#   neo4j → Cypher export;  falkordb optional (not included)
+#   svg (matplotlib) → SVG export;  leiden (graspologic) → better communities
+#   pdf,office,google,postgres → doc / Google-Workspace / DB-schema ingestion
+# Export formats graph.json/graph.html/GraphML/callflow-html are base (networkx).
 RUN pip install --upgrade pip setuptools wheel \
-    && pip install ".[neo4j,watch,mcp]" uvicorn
+    && pip install ".[mcp,neo4j,watch,svg,leiden,pdf,office,google,postgres]" uvicorn
 
 
 FROM python:3.12-slim AS runtime

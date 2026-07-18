@@ -131,6 +131,11 @@ func (w *worker) handle(data events.RepoEventData) error {
 			w.logger.Error("graphify extract failed", "id", id, "tail", logTail)
 			return w.fail(id, "graphify", err.Error())
 		}
+		// Best-effort: produce the UI-ready formats (graph.html, GRAPH_REPORT.md,
+		// graph.graphml, callflow html, graph.svg). Never fatal — graph.json exists.
+		if enrich := graphify.Enrich(context.Background(), repoDir, w.cfg.RunTimeout); len(enrich.Failed) > 0 {
+			w.logger.Warn("graphify enrich: some steps failed", "id", id, "failed", enrich.Failed)
+		}
 	} else {
 		w.logger.Info("using committed graphify-out", "id", id)
 	}

@@ -2,6 +2,16 @@
 
 **Requirements:** R4 (artifact inventory + zip + filtering), R7 (local client).
 
+**Status update:** the worker now produces the **UI-ready format set** offline (no
+LLM): `graph.json` (canonical), `graph.html`, `graph.graphml`, `graph.svg`,
+`GRAPH_REPORT.md`, `<repo>-callflow.html` — via `graphify extract --code-only`
+then best-effort `cluster-only` + `export {graphml,callflow-html,svg}` (the
+graphify image bakes `svg`/`leiden`/`pdf`/`office`/`google`/`postgres` extras).
+Beyond the zip, the API serves any single artifact directly for a UI:
+`GET /api/v1/repositories/{id}/artifacts/{name}` (allowlisted, correct
+content-type). `graph.json`/`GraphML` are the inputs for the future A2UI /
+open-knowledge generator (that generator is our UI layer, not graphify).
+
 ## Problem
 
 A finished graph produces many files. Clients want either the default set or a
