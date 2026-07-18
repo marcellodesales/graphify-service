@@ -1,0 +1,28 @@
+sequenceDiagram
+  actor Client
+  participant API as graphify-api
+  participant NATS as NATS JetStream
+  participant Cloner as graphify-cloner
+  participant Worker as graphify-worker
+  participant FS as data/repos (shared vol)
+
+  Client->>API: POST /api/v1/repositories {githubRepoUrl}
+  API->>FS: Store.Create -> writeAtomic(metadata=queued)
+  API->>NATS: publish clone.requested (msgId clone-request:id)
+  API-->>Client: 202 {id, statusUrl}
+  NATS->>Cloner: deliver clone.requested
+  Cloner->>FS: git clone --depth 1 -> rename tmp -> repository/
+  Cloner->>FS: Store.Update -> writeAtomic(status=cloned, resolvedSha)
+  Cloner->>NATS: publish cloned
+  NATS->>Worker: deliver cloned
+  Worker->>FS: graphify extract --code-only -> graphify-out/graph.json
+  Worker->>FS: Store.Update -> writeAtomic(status=ready, artifacts[])
+  Worker->>NATS: publish graph.ready
+  loop poll until ready
+    Client->>API: GET /api/v1/repositories/{id}
+    API->>FS: Store.Get -> readUnlocked(metadata.json)
+    API-->>Client: {status}
+  end
+  Client->>API: GET /api/v1/repositories/{id}/download?format=zip
+  API->>FS: artifacts.Zip(repoDir, items)
+  API-->>Client: 200 application/zip
