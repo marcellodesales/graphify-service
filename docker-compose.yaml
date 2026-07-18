@@ -51,10 +51,11 @@ services:
   # ── Go control plane: REST + MCP API (spec §6, §12) ────────────────────────
   # CI build target for docker-multiarch-cicd-backend.yaml.
   graphify-api:
-    # Monorepo image naming: <owner>/<repo>/<service> subpath so the multiple
-    # images published from this one repo never clobber each other (see the
-    # vionix-docker-cicd skill). GHCR supports multi-segment names.
-    image: marcellodesales/graphify-service/api
+    # Monorepo image naming: <registry>/<owner>/<repo>/<service> subpath so the
+    # multiple images published from this one repo never clobber each other (see
+    # the vionix-docker-cicd skill). Published to GHCR (we don't push to Docker
+    # Hub), so reference GHCR here for local pull/test consistency.
+    image: ghcr.io/marcellodesales/graphify-service/api
     build:
       context: ./backend
       dockerfile: api/Dockerfile
@@ -78,7 +79,7 @@ services:
   # ── Clone worker: secure shallow/SHA-only git clones (spec §9) ─────────────
   # CI build target for docker-multiarch-cicd-cloner.yaml.
   graphify-cloner:
-    image: marcellodesales/graphify-service/cloner
+    image: ghcr.io/marcellodesales/graphify-service/cloner
     build:
       context: ./backend
       dockerfile: cloner/Dockerfile
@@ -102,7 +103,7 @@ services:
   # CI build target for docker-multiarch-cicd-worker.yaml.
   # Built FROM the graphify image so the `graphify` binary is on PATH.
   graphify-worker:
-    image: marcellodesales/graphify-service/worker
+    image: ghcr.io/marcellodesales/graphify-service/worker
     build:
       context: ./backend
       dockerfile: worker/Dockerfile

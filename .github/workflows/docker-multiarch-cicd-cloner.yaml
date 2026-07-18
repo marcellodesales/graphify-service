@@ -56,9 +56,7 @@ jobs:
   docker-multiarch:
     name: 🐳 docker (cloner)
     needs: [ setup ]
-    # Testing the opt-in image-name-suffix on the vionix feature branch
-    # (vionix-proj/github-platform#4). Switch to @main once that PR merges.
-    uses: vionix-proj/github-platform/.github/workflows/docker-multiarch-cicd.yaml@feat/monorepo-image-name-suffix
+    uses: vionix-proj/github-platform/.github/workflows/docker-multiarch-cicd.yaml@main
     permissions:
       contents: write
       packages: write
