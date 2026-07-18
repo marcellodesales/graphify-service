@@ -33,8 +33,10 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE /app/
 COPY graphify /app/graphify
 
+# [mcp] adds the MCP server deps (mcp, starlette); uvicorn powers the HTTP
+# transport used by the graphify-mcp query service.
 RUN pip install --upgrade pip setuptools wheel \
-    && pip install ".[neo4j,watch]"
+    && pip install ".[neo4j,watch,mcp]" uvicorn
 
 
 FROM python:3.12-slim AS runtime
