@@ -1,0 +1,11 @@
+# Build context is ./backend for api/cloner/worker images.
+.git
+.data
+data
+*.md
+!README.md
+Dockerfile
+**/Dockerfile
+# local test/coverage artifacts
+*.out
+*.test
