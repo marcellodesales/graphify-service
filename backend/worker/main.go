@@ -48,7 +48,7 @@ func run() error {
 	defer bus.Close()
 
 	w := &worker{cfg: cfg, logger: logger, store: store, bus: bus}
-	sub, err := bus.Subscribe(events.SubjectCloned, events.DurableGraphWorker, w.handle)
+	sub, err := bus.Subscribe(events.SubjectCloned, events.DurableGraphWorker, cfg.RunTimeout+time.Minute, w.handle)
 	if err != nil {
 		return err
 	}
