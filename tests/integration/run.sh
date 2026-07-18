@@ -76,4 +76,16 @@ BRU=(bru)
 if ! command -v bru >/dev/null 2>&1; then BRU=(npx --yes @usebruno/cli); fi
 ( cd tests/integration/bruno && "${BRU[@]}" run . --env local --env-var "refId=$ID" )
 
+echo "==> materialize produced artifacts to the resources dir"
+OUTDIR="${RESOURCES_DIR:-$ROOT/tests/integration/output}/$ID"
+mkdir -p "$OUTDIR"
+for f in graph.json graph.html graph.graphml graph.svg GRAPH_REPORT.md manifest.json repository-callflow.html; do
+  if curl -fsS "$BASE/api/v1/repositories/$ID/artifacts/$f" -o "$OUTDIR/$f" 2>/dev/null; then
+    echo "   saved $f"
+  fi
+done
+curl -fsS "$BASE/api/v1/repositories/$ID/download?format=zip" -o "$OUTDIR/graphify-$ID.zip" 2>/dev/null && echo "   saved graphify-$ID.zip"
+echo "   resources dir: $OUTDIR"
+ls -la "$OUTDIR" 2>/dev/null | sed 's/^/     /'
+
 echo "==> T1 GREEN ✅"

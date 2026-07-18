@@ -44,3 +44,6 @@ paper/
 # graphify-service local pipeline data (bind mount)
 data/repos/
 data/
+
+# integration test materialized artifacts (resources dir)
+tests/integration/output/

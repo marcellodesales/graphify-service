@@ -15,11 +15,14 @@ assert {
 }
 
 tests {
-  test("inventory contains the UI-ready formats", function () {
+  test("inventory contains the full UI-ready format set", function () {
     const names = res.getBody().artifacts.map(function (a) { return a.name; });
-    expect(names).to.include("graph.json");   // canonical queryable data
-    expect(names).to.include("graph.html");   // interactive viewer
-    expect(names).to.include("graph.graphml"); // Gephi/yEd/Cytoscape
+    expect(names).to.include("graph.json");     // canonical queryable data
+    expect(names).to.include("graph.html");     // interactive viewer
+    expect(names).to.include("graph.graphml");  // Gephi/yEd/Cytoscape
+    expect(names).to.include("graph.svg");      // static image
+    expect(names).to.include("GRAPH_REPORT.md"); // report
+    expect(names.some(function (n) { return /-callflow\.html$/.test(n); })).to.equal(true); // Mermaid callflow
   });
   test("no internal .graphify_* or .git files are exposed", function () {
     const names = res.getBody().artifacts.map(function (a) { return a.name; });
