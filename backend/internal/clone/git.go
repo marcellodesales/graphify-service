@@ -119,9 +119,12 @@ func out(ctx context.Context, opts Options, dir string, args ...string) (string,
 func gitEnv(opts Options) []string {
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if opts.SSHKeyPath != "" {
-		ssh := "ssh -i " + opts.SSHKeyPath + " -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes"
+		// Escape single quotes to prevent command injection in GIT_SSH_COMMAND which is executed by a shell.
+		safeKeyPath := "'" + strings.ReplaceAll(opts.SSHKeyPath, "'", "'\\''") + "'"
+		ssh := "ssh -i " + safeKeyPath + " -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes"
 		if opts.KnownHosts != "" {
-			ssh += " -o UserKnownHostsFile=" + opts.KnownHosts
+			safeKnownHosts := "'" + strings.ReplaceAll(opts.KnownHosts, "'", "'\\''") + "'"
+			ssh += " -o UserKnownHostsFile=" + safeKnownHosts
 		}
 		env = append(env, "GIT_SSH_COMMAND="+ssh)
 	}
