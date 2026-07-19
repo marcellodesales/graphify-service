@@ -1,0 +1,25 @@
+meta {
+  name: Fetch GraphML artifact (Gephi/yEd/Cytoscape)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/api/v1/repositories/{{refId}}/artifacts/graph.graphml
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("served as GraphML XML", function () {
+    expect(res.getHeader("content-type")).to.match(/graphml\+xml/);
+  });
+  test("body is a GraphML document", function () {
+    const body = String(res.getBody());
+    expect(body).to.match(/graphml/i);
+  });
+}

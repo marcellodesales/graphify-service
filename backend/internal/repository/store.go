@@ -94,6 +94,30 @@ func (s *Store) Get(id string) (Metadata, error) {
 	return s.readUnlocked(id)
 }
 
+// Update applies mutate to the current metadata for id and persists it
+// atomically under the per-id lock. It bumps UpdatedAt. Returns the new record.
+func (s *Store) Update(id string, mutate func(*Metadata) error) (Metadata, error) {
+	if !ValidID(id) {
+		return Metadata{}, ErrNotFound
+	}
+	lock := s.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	m, err := s.readUnlocked(id)
+	if err != nil {
+		return Metadata{}, err
+	}
+	if err := mutate(&m); err != nil {
+		return Metadata{}, err
+	}
+	m.Timestamps.UpdatedAt = time.Now().UTC()
+	if err := s.writeAtomic(m); err != nil {
+		return Metadata{}, err
+	}
+	return m, nil
+}
+
 // ListFilter narrows and pages a List call.
 type ListFilter struct {
 	Status Status // optional
@@ -168,18 +192,30 @@ func matches(m Metadata, f ListFilter) bool {
 }
 
 func (s *Store) readUnlocked(id string) (Metadata, error) {
-	b, err := os.ReadFile(s.layout.MetadataPath(id))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Metadata{}, ErrNotFound
+	path := s.layout.MetadataPath(id)
+	// Writes are atomic (temp + rename), so on POSIX filesystems a reader never
+	// sees a partial file. On non-atomic-rename shares (Docker Desktop bind
+	// mounts on macOS, some network filesystems) a read can momentarily observe
+	// a truncated file mid-write. Retry a decode error a few times as pure
+	// defense-in-depth; a real read error (missing/permission) returns at once.
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return Metadata{}, ErrNotFound
+			}
+			return Metadata{}, fmt.Errorf("repository: read metadata: %w", err)
 		}
-		return Metadata{}, fmt.Errorf("repository: read metadata: %w", err)
+		var m Metadata
+		if err := json.Unmarshal(b, &m); err != nil {
+			lastErr = fmt.Errorf("repository: decode metadata: %w", err)
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		return m, nil
 	}
-	var m Metadata
-	if err := json.Unmarshal(b, &m); err != nil {
-		return Metadata{}, fmt.Errorf("repository: decode metadata: %w", err)
-	}
-	return m, nil
+	return Metadata{}, lastErr
 }
 
 // writeAtomic writes meta to metadata.json via a temp file + fsync + rename so

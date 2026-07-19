@@ -18,6 +18,7 @@ import (
 
 	"github.com/marcellodesales/graphify-service/backend/internal/api"
 	"github.com/marcellodesales/graphify-service/backend/internal/config"
+	"github.com/marcellodesales/graphify-service/backend/internal/events"
 	"github.com/marcellodesales/graphify-service/backend/internal/repository"
 	"github.com/marcellodesales/graphify-service/backend/internal/telemetry"
 )
@@ -41,7 +42,17 @@ func run() error {
 		return err
 	}
 
-	srv := api.NewServer(cfg, store, logger)
+	// Connect to NATS to drive the async pipeline. If NATS is unavailable the
+	// API still serves (submissions persist as queued) but won't publish.
+	var bus api.Publisher
+	if b, err := events.Connect(cfg.NATSURL, "urn:graphify-service:api"); err != nil {
+		logger.Warn("nats unavailable — pipeline publishing disabled", "error", err)
+	} else {
+		bus = b
+		defer b.Close()
+	}
+
+	srv := api.NewServer(cfg, store, logger, bus)
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Handler(),

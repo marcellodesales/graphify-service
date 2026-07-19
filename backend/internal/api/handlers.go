@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,10 +11,21 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/marcellodesales/graphify-service/backend/internal/artifacts"
 	"github.com/marcellodesales/graphify-service/backend/internal/config"
+	"github.com/marcellodesales/graphify-service/backend/internal/events"
 	"github.com/marcellodesales/graphify-service/backend/internal/giturl"
+	"github.com/marcellodesales/graphify-service/backend/internal/mcpproxy"
 	"github.com/marcellodesales/graphify-service/backend/internal/repository"
+	"github.com/marcellodesales/graphify-service/backend/internal/statushttp"
 )
+
+// Publisher publishes pipeline events (satisfied by *events.Bus). Nil-safe: when
+// nil the API still accepts submissions but does not drive the async pipeline.
+type Publisher interface {
+	Publish(subject, msgID string, data events.RepoEventData) error
+	Connected() bool
+}
 
 // Server holds the HTTP handler dependencies.
 type Server struct {
@@ -21,15 +33,17 @@ type Server struct {
 	store  *repository.Store
 	logger *slog.Logger
 	auth   authenticator
+	bus    Publisher
 }
 
-// NewServer builds a Server.
-func NewServer(cfg config.Config, store *repository.Store, logger *slog.Logger) *Server {
+// NewServer builds a Server. bus may be nil (pipeline disabled).
+func NewServer(cfg config.Config, store *repository.Store, logger *slog.Logger, bus Publisher) *Server {
 	return &Server{
 		cfg:    cfg,
 		store:  store,
 		logger: logger,
 		auth:   authenticator{mode: cfg.AuthMode, token: cfg.APIToken},
+		bus:    bus,
 	}
 }
 
@@ -88,6 +102,19 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Kick off (or re-kick) the async pipeline. Idempotent via Nats-Msg-Id;
+	// only publish while still queued so terminal/in-flight jobs aren't disturbed.
+	if s.bus != nil && saved.Status == repository.StatusQueued {
+		if err := s.bus.Publish(events.SubjectCloneRequested, "clone-request:"+saved.ID, events.RepoEventData{
+			RepositoryID:  saved.ID,
+			SelectorType:  string(saved.Selector.Type),
+			SelectorValue: saved.Selector.Value,
+		}); err != nil {
+			// Metadata is durably 'queued'; a later resubmit re-publishes.
+			s.logger.Error("publish clone.requested", "request_id", RequestIDFrom(r.Context()), "id", saved.ID, "error", err)
+		}
+	}
+
 	status := http.StatusOK
 	if created {
 		status = http.StatusAccepted
@@ -97,6 +124,190 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		Status:       string(saved.Status),
 		StatusURL:    repoPath(saved.ID),
 		ArtifactsURL: repoPath(saved.ID) + "/artifacts",
+	})
+}
+
+// handleArtifacts implements GET /api/v1/repositories/{id}/artifacts (spec §6.5).
+func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !repository.ValidID(id) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid repository id")
+		return
+	}
+	m, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "repository not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read repository")
+		return
+	}
+	arts := m.Artifacts
+	if arts == nil {
+		arts = []repository.Artifact{}
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{
+		"id":        m.ID,
+		"status":    string(m.Status),
+		"artifacts": arts,
+	})
+}
+
+// handleDownload implements GET /api/v1/repositories/{id}/download?format=zip
+// with optional include/exclude filtering (spec §6.6, PRD-003).
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !repository.ValidID(id) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid repository id")
+		return
+	}
+	if f := strings.TrimSpace(r.URL.Query().Get("format")); f != "" && f != "zip" {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "only format=zip is supported")
+		return
+	}
+	m, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "repository not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read repository")
+		return
+	}
+	if m.Status != repository.StatusReady {
+		writeError(w, r, http.StatusConflict, "not_ready", "repository is not ready (status: "+string(m.Status)+")")
+		return
+	}
+	items := artifacts.Select(m.Artifacts, csv(r.URL.Query().Get("include")), csv(r.URL.Query().Get("exclude")))
+	if len(items) == 0 {
+		writeError(w, r, http.StatusNotFound, "no_artifacts", "no matching artifacts to download")
+		return
+	}
+	repoDir := s.store.Layout().RepositoryDir(id)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"graphify-"+id[:12]+".zip\"")
+	if err := artifacts.Zip(w, repoDir, items); err != nil {
+		s.logger.Error("zip download", "request_id", RequestIDFrom(r.Context()), "id", id, "error", err)
+		// Headers/body may be partially written; nothing safe to add.
+	}
+}
+
+// handleArtifactFile serves a single allowlisted artifact for a ready repo
+// (PRD-003) so a UI can fetch graph.json / graph.html / graph.graphml directly.
+func (s *Server) handleArtifactFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !repository.ValidID(id) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid repository id")
+		return
+	}
+	m, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "repository not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read repository")
+		return
+	}
+	if m.Status != repository.StatusReady {
+		writeError(w, r, http.StatusConflict, "not_ready", "repository is not ready (status: "+string(m.Status)+")")
+		return
+	}
+	// Only names present in the (allowlisted) inventory are servable.
+	name := r.PathValue("name")
+	var art *repository.Artifact
+	for i := range m.Artifacts {
+		if m.Artifacts[i].Name == name {
+			art = &m.Artifacts[i]
+			break
+		}
+	}
+	if art == nil {
+		writeError(w, r, http.StatusNotFound, "not_found", "artifact not found")
+		return
+	}
+	full := filepath.Join(s.store.Layout().RepositoryDir(id), art.Path)
+	fi, err := os.Lstat(full)
+	if err != nil || !fi.Mode().IsRegular() { // refuse symlinks/dirs
+		writeError(w, r, http.StatusNotFound, "not_found", "artifact unavailable")
+		return
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to open artifact")
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", art.MediaType)
+	w.Header().Set("Content-Length", strconv.FormatInt(art.Size, 10))
+	_, _ = io.Copy(w, f)
+}
+
+// handleServiceStatus implements GET /status/{id} — the uniform status protocol.
+func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, r, http.StatusOK, statushttp.EnvelopeFor("api", s.store, r.PathValue("id")))
+}
+
+// handleQuery implements POST /api/v1/repositories/{id}/query (PRD-004): it
+// composes with the graphify-mcp server, injecting project_path for this repo,
+// so the caller can ask questions about a ready repo's graph.
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !repository.ValidID(id) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid repository id")
+		return
+	}
+	m, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "repository not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read repository")
+		return
+	}
+	if m.Status != repository.StatusReady {
+		writeError(w, r, http.StatusConflict, "not_ready", "repository is not ready (status: "+string(m.Status)+")")
+		return
+	}
+
+	var req queryRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "malformed JSON body: "+err.Error())
+		return
+	}
+	tool := strings.TrimSpace(req.Tool)
+	if tool == "" {
+		tool = "query_graph"
+	}
+	question := strings.TrimSpace(req.Question)
+	if tool == "query_graph" && question == "" {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "question is required for query_graph")
+		return
+	}
+
+	// Inject project_path so the shared graphify-mcp answers for THIS repo.
+	args := map[string]any{"project_path": s.store.Layout().RepositoryDir(id)}
+	if question != "" {
+		args["question"] = question
+	}
+
+	client := mcpproxy.New(s.cfg.MCPURL)
+	answer, isErr, err := client.CallTool(r.Context(), tool, args)
+	if err != nil {
+		s.logger.Error("query", "request_id", RequestIDFrom(r.Context()), "id", id, "tool", tool, "error", err)
+		writeError(w, r, http.StatusBadGateway, "query_backend_error", "graph query backend error")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, queryResponse{
+		ID:       id,
+		Tool:     tool,
+		Question: question,
+		Answer:   answer,
+		IsError:  isErr,
 	})
 }
 
@@ -161,12 +372,17 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleReadyz reports readiness: the repos root must be writable (public).
+// handleReadyz reports readiness: repos root writable + NATS connected (public).
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if err := checkWritable(s.store.Layout().Root()); err != nil {
 		writeJSON(w, r, http.StatusServiceUnavailable, map[string]string{
-			"status": "unavailable",
-			"reason": "repos root not writable",
+			"status": "unavailable", "reason": "repos root not writable",
+		})
+		return
+	}
+	if s.bus != nil && !s.bus.Connected() {
+		writeJSON(w, r, http.StatusServiceUnavailable, map[string]string{
+			"status": "unavailable", "reason": "nats not connected",
 		})
 		return
 	}
@@ -174,6 +390,21 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- helpers ---
+
+// csv splits a comma-separated query value into trimmed, non-empty names.
+func csv(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 func buildSelector(ref, sha string) (repository.Selector, error) {
 	ref = strings.TrimSpace(ref)

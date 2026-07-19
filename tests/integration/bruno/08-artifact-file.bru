@@ -1,0 +1,26 @@
+meta {
+  name: Fetch a single artifact (graph.json) for the UI
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/api/v1/repositories/{{refId}}/artifacts/graph.json
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("served as JSON", function () {
+    expect(res.getHeader("content-type")).to.match(/application\/json/);
+  });
+  test("is a non-empty graph document", function () {
+    const g = res.getBody();
+    expect(g).to.be.an("object");
+    expect(JSON.stringify(g).length).to.be.greaterThan(100);
+  });
+}

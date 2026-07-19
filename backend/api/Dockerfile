@@ -6,7 +6,7 @@
 #
 # Minimal image on purpose (spec §3.2): the API has NO git and NO SSH key access.
 
-FROM golang:1.24-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 # go.sum is optional (stdlib-only today); the glob no-ops when absent.

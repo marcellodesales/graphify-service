@@ -1,0 +1,27 @@
+####
+#### Integration-test override (T1). Layer on top of the base compose:
+####   docker compose -f docker-compose.yaml -f tests/integration/docker-compose.test.yaml up -d
+####
+#### The worker is built FROM the graphify image; run.sh builds `graphify` first
+#### (fresh from source, so the `graphify extract` subcommand exists — the
+#### published marcellodesales/graphify:latest is older and lacks it).
+####
+services:
+  graphify-api:
+    environment:
+      GRAPHIFY_ENV: development
+      GRAPHIFY_AUTH_MODE: none
+      GRAPHIFY_LOG_LEVEL: debug
+
+  graphify-cloner:
+    environment:
+      GRAPHIFY_LOG_LEVEL: debug
+
+  graphify-worker:
+    build:
+      args:
+        # Use the locally-built fresh graphify base (has `extract`).
+        GRAPHIFY_IMAGE: marcellodesales/graphify:latest
+    environment:
+      GRAPHIFY_CODE_ONLY: "true" # local AST, no LLM key
+      GRAPHIFY_LOG_LEVEL: debug

@@ -1,0 +1,25 @@
+flowchart LR
+  subgraph API["graphify-api"]
+    handleSubmit[".handleSubmit()<br/>api/handlers.go"]
+    Create[".Create()<br/>store.go:54"]
+    Get[".Get()<br/>store.go:87"]
+    readUnlocked[".readUnlocked()<br/>store.go:194"]
+  end
+  subgraph WK["cloner / worker"]
+    handle[".handle()"]
+    Update[".Update()<br/>store.go:99"]
+  end
+  Store["Store<br/>store.go:19"]
+  writeAtomic[".writeAtomic()<br/>store.go:223<br/>temp + fsync + rename"]
+  Metadata["Metadata"]
+
+  handleSubmit --> Store
+  handle --> Store
+  Store --> Create
+  Store --> Update
+  Store --> Get
+  Create -->|calls| writeAtomic
+  Update -->|calls| writeAtomic
+  Get -->|calls| readUnlocked
+  writeAtomic -->|references| Metadata
+  readUnlocked -->|reads| Metadata

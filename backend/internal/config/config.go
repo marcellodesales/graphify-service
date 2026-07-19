@@ -38,6 +38,11 @@ type Config struct {
 	CloneTimeout    time.Duration // GRAPHIFY_CLONE_TIMEOUT
 	RunTimeout      time.Duration // GRAPHIFY_RUN_TIMEOUT
 	MCPStateless    bool          // GRAPHIFY_MCP_STATELESS
+	NATSURL         string        // NATS_URL
+	CodeOnly        bool          // GRAPHIFY_CODE_ONLY (graphify extract --code-only)
+	SSHRoot         string        // GRAPHIFY_SSH_ROOT
+	KnownHosts      string        // GRAPHIFY_KNOWN_HOSTS
+	MCPURL          string        // GRAPHIFY_MCP_URL (graphify-mcp Streamable HTTP endpoint)
 }
 
 // Load reads configuration from the environment, applies defaults, and validates.
@@ -51,6 +56,11 @@ func Load() (Config, error) {
 		LogLevel:        getenv("GRAPHIFY_LOG_LEVEL", "info"),
 		AllowedGitHosts: splitCSV(os.Getenv("GRAPHIFY_ALLOWED_GIT_HOSTS")),
 		MCPStateless:    getbool("GRAPHIFY_MCP_STATELESS", true),
+		NATSURL:         getenv("NATS_URL", "nats://nats:4222"),
+		CodeOnly:        getbool("GRAPHIFY_CODE_ONLY", true),
+		SSHRoot:         getenv("GRAPHIFY_SSH_ROOT", "/run/secrets/graphify-ssh"),
+		KnownHosts:      os.Getenv("GRAPHIFY_KNOWN_HOSTS"),
+		MCPURL:          getenv("GRAPHIFY_MCP_URL", "http://graphify-mcp:8080/mcp"),
 	}
 
 	var err error

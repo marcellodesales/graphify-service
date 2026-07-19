@@ -1,0 +1,37 @@
+name: 🧪 backend unit tests
+run-name: 🧪 backend unit — PR ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+
+# Fast Go unit tests (giturl, repository, api, artifacts) — separate from the
+# heavier docker integration test. Guards the artifacts testdata fixtures too.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/backend-unit.yml'
+      - 'backend/**'
+  workflow_dispatch:
+
+jobs:
+  go-test:
+    name: go test ./...
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GO111MODULE: "on"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: backend/go.sum
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+
+      - name: Test
+        working-directory: backend
+        run: go test ./...
