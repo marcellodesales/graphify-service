@@ -1,0 +1,65 @@
+# NATS JetStream — the async backbone (compose service: nats).
+# StatefulSet because JetStream persists streams/consumers to disk; a per-pod
+# PVC (RWO) via volumeClaimTemplates is correct for a single ordered replica.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: graphify
+  labels:
+    app: nats
+    app.kubernetes.io/part-of: graphify-service
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+        app.kubernetes.io/part-of: graphify-service
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: nats
+          # Image name is rewritten to the Artifactory Docker Hub proxy + pinned
+          # tag by the top-level kustomization `images:` transformer.
+          image: nats:2.10.22-alpine
+          args:
+            - "--jetstream"
+            - "--store_dir=/data"
+            - "--http_port=8222"
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "500m", memory: 512Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

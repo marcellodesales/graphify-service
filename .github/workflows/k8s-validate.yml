@@ -1,0 +1,45 @@
+name: 🧭 k8s manifests validate
+run-name: 🧭 k8s validate — PR ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+
+# Renders the Kustomize overlays so a broken manifest fails the PR. This repo
+# lives on github.com, so it does NOT use the Viasat GHES reusable kustomize
+# workflow; it just runs `kustomize build` (+ a dry structural check).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/k8s-validate.yml'
+      - 'deploy/**'
+  workflow_dispatch:
+
+jobs:
+  kustomize-build:
+    name: kustomize build (render)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kustomize
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
+          sudo mv kustomize /usr/local/bin/
+          kustomize version
+
+      - name: Render every overlay
+        run: |
+          set -euo pipefail
+          fail=0
+          # Each deploy/<cluster> dir with a top-level kustomization.yaml is an overlay.
+          for k in deploy/*/kustomization.yaml; do
+            dir="$(dirname "$k")"
+            echo "::group::kustomize build $dir"
+            if kustomize build "$dir" > "/tmp/$(basename "$dir").yaml"; then
+              echo "OK: $dir ($(wc -l < "/tmp/$(basename "$dir").yaml") lines)"
+            else
+              echo "::error::kustomize build failed for $dir"; fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail

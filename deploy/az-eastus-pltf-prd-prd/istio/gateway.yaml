@@ -1,0 +1,32 @@
+# Binds graphify.vionix.viasat.io to the shared cluster ingress gateway.
+# selector istio: ingressgateway → the shared internal Azure LB (do NOT stand up
+# a per-app LB). credentialName must match the Certificate secretName (in
+# istio-system). Plain HTTP is redirected to HTTPS.
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: graphify-gateway
+  namespace: graphify
+  labels:
+    app.kubernetes.io/part-of: graphify-service
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - hosts:
+        - graphify.vionix.viasat.io
+      port:
+        name: https-graphify
+        number: 443
+        protocol: HTTPS
+      tls:
+        credentialName: graphify-vionix-viasat-io
+        mode: SIMPLE
+    - hosts:
+        - graphify.vionix.viasat.io
+      port:
+        name: http-graphify
+        number: 80
+        protocol: HTTP
+      tls:
+        httpsRedirect: true

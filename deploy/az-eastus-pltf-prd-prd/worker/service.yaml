@@ -1,0 +1,17 @@
+# ClusterIP for the worker status protocol (/healthz, /readyz, /status/{id}).
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphify-worker
+  namespace: graphify
+  labels:
+    app: graphify-worker
+    app.kubernetes.io/part-of: graphify-service
+spec:
+  type: ClusterIP
+  selector:
+    app: graphify-worker
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

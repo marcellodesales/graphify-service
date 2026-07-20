@@ -1,0 +1,21 @@
+# TLS cert for graphify.vionix.viasat.io.
+#
+# MUST live in istio-system: the shared ingress gateway resolves a Gateway's
+# tls.credentialName in its OWN namespace. secretName here == the Gateway's
+# credentialName. Issued by the shared ClusterIssuer (ACME + VICE DNS-01), which
+# is independent of the CNAME existing.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: graphify-vionix-viasat-io
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: graphify-service
+spec:
+  secretName: graphify-vionix-viasat-io
+  dnsNames:
+    - graphify.vionix.viasat.io
+  issuerRef:
+    name: vionix-viasat-io
+    kind: ClusterIssuer
+    group: cert-manager.io

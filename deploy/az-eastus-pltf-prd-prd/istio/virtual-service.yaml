@@ -1,0 +1,20 @@
+# Routes the external host to the in-cluster graphify-api Service.
+# Same-namespace gateway → referenced by bare name.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: graphify-virtual-service
+  namespace: graphify
+  labels:
+    app.kubernetes.io/part-of: graphify-service
+spec:
+  hosts:
+    - graphify.vionix.viasat.io
+  gateways:
+    - graphify-gateway
+  http:
+    - route:
+        - destination:
+            host: graphify-api.graphify.svc.cluster.local
+            port:
+              number: 8080
