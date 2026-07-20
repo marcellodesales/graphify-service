@@ -12,9 +12,15 @@
 #### Notes:
 ####   - graphify-worker is built FROM the graphify image (marcellodesales/graphify),
 ####     which ships the `graphify` binary. Run `docker compose build graphify` first.
-####   - graphify-cloner / graphify-worker are Phase 2/3 placeholders today: they log
-####     their intent and exit (restart: "no"). The graphify-api is the working Phase 1 service.
-####   - neo4j is optional: `docker compose --profile neo4j up neo4j`.
+####   - graphify-cloner and graphify-worker are real long-running NATS workers:
+####     the cloner consumes clone.requested → publishes cloned; the worker consumes
+####     cloned → runs `graphify extract` + enrich → publishes graph.ready. Both also
+####     serve the status protocol (/healthz, /readyz, /status/{id}) on :8080.
+####   - This stack is the LOCAL DEV surface. The production deploy mirrors it on
+####     Kubernetes — see deploy/az-eastus-pltf-prd-prd/ (graphify.vionix.viasat.io).
+####   - neo4j is optional (opt-in): `docker compose --profile neo4j up neo4j`.
+####     Pinned to 5.26 to match Graphiti's Neo4j 5.26+ requirement (temporal
+####     graph phase — see docs/GRAPHITI-INTEGRATION.md).
 ####
 
 x-graphify-env: &graphify-env
@@ -168,8 +174,9 @@ services:
     command: ["watch", "."]
 
   # ── Optional graph database (opt-in via --profile neo4j) ───────────────────
+  # Pinned to 5.26 — the minimum Graphiti supports (temporal graph phase).
   neo4j:
-    image: neo4j:5.22.0-community
+    image: neo4j:5.26-community
     profiles: ["neo4j"]
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/graphify}

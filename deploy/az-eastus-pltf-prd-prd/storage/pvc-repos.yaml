@@ -1,0 +1,25 @@
+# Shared "repos" volume — the k8s equivalent of compose's ./data/repos bind mount.
+#
+# In compose, api + cloner + worker all bind-mount the same host dir: the cloner
+# writes the clone, the worker reads it + writes graphify-out/, and the api serves
+# artifacts from it. That shared filesystem is load-bearing for the pipeline, so
+# in k8s it MUST be ReadWriteMany (multiple pods, possibly different nodes).
+#
+# RWX requires an RWX-capable StorageClass. On this Azure/Rancher cluster that is
+# Azure Files (azurefile-csi). CONFIRM the exact class at apply time:
+#   kubectl get storageclass          # look for a RWX (azurefile) provisioner
+# and adjust storageClassName below if it differs.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: graphify-repos
+  namespace: graphify
+  labels:
+    app.kubernetes.io/part-of: graphify-service
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi
+  resources:
+    requests:
+      storage: 5Gi

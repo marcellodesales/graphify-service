@@ -1,0 +1,17 @@
+# Namespace for graphify-service on the Vionix platform cluster.
+#
+# PSA MUST be `privileged` (all three labels): the cluster runs Istio in
+# init-container mode (not CNI); istio-init needs NET_ADMIN/NET_RAW, which
+# baseline/restricted forbid → pods would fail to schedule. Mirrors kagent/hodor.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: graphify
+  labels:
+    istio-injection: enabled
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+    app.kubernetes.io/part-of: graphify-service
+    app.kubernetes.io/managed-by: kustomize
+    platform: vionix

@@ -1,0 +1,16 @@
+# Grants all ServiceAccounts in the graphify namespace the cluster's
+# pre-installed unrestricted PSP ClusterRole, so pods can schedule against
+# Viasat Container Services' default PSP (mirrors kagent's namespace layer).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: unrestricted-psp
+  namespace: graphify
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: unrestricted-clusterrole
+subjects:
+  - kind: Group
+    name: system:serviceaccounts:graphify
+    apiGroup: rbac.authorization.k8s.io
