@@ -98,10 +98,13 @@ host with the platform `oauth2-proxy` (`AuthorizationPolicy` + ext_authz).
 
 ## compose ↔ k8s gaps (the point of Phase 1)
 
-1. **Shared repos volume.** Compose shares one host dir across api/cloner/worker.
-   K8s needs **ReadWriteMany**; `storage/pvc-repos.yaml` requests `azurefile-csi`.
-   **Confirm the cluster's RWX StorageClass before apply** (`kubectl get storageclass`)
-   and adjust if the name differs — a wrong class leaves pods `Pending`.
+1. **Shared repos volume (RWX) — BLOCKER.** Compose shares one host dir across
+   api/cloner/worker. K8s needs **ReadWriteMany**; `storage/pvc-repos.yaml`
+   requests `azurefile-csi`. This Rancher/Azure cluster ships **only** Azure Disk
+   (RWO) today, so the `azurefile-csi` StorageClass + driver must be installed
+   first — that is the platform PR **vionix-platform-k8s-core#15**
+   (`third-party/azurefile-csi/`). **This deploy is blocked until #15 lands and is
+   applied.** Verify with `kubectl get storageclass azurefile-csi` before apply.
 2. **Worker's graphify base.** The worker image is `FROM marcellodesales/graphify`.
    If CI built it FROM the stale Docker Hub `:latest`, `graphify extract` may be
    missing/old and the worker stage will fail. Fix: publish a fresh graphify base
