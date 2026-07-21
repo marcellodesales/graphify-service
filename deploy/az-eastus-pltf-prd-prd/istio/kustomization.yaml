@@ -1,9 +1,0 @@
-# NO top-level `namespace:` here on purpose — the Certificate must stay in
-# istio-system while the Gateway/VirtualService live in graphify. Setting a
-# namespace would rewrite all three into one and break TLS credential resolution.
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - certificate.yaml
-  - gateway.yaml
-  - virtual-service.yaml
