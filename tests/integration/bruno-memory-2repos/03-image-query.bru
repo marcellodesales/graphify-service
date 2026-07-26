@@ -1,0 +1,41 @@
+meta {
+  name: Cross-repo query resolves against the unified graph
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/query
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "question": "image"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.isError: eq false
+  res.body.tool: eq query_graph
+}
+
+tests {
+  test("answer is a non-empty string", function () {
+    expect(res.getBody().answer).to.be.a("string").and.to.have.length.greaterThan(0);
+  });
+}
+
+docs {
+  The whole point of a memory is one graph spanning many repos: a query issued
+  once must resolve against the merged app + deploy graph. Content correlation
+  (matching a deploy image ref back to the app) depends on --code-only YAML
+  indexing and is reported informationally by the shell driver, not hard-asserted
+  here; this only asserts the query executes cleanly over the unified graph.
+}

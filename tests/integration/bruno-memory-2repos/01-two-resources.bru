@@ -1,0 +1,27 @@
+meta {
+  name: Both repos ingested as ready resources
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/resources
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("at least two resources are attached", function () {
+    const rs = res.getBody().resources;
+    expect(rs).to.be.an("array").and.to.have.length.greaterThan(1);
+  });
+  test("every resource ingested successfully", function () {
+    res.getBody().resources.forEach(function (r) {
+      expect(r.status, "resource " + r.id + " status").to.equal("ready");
+    });
+  });
+}

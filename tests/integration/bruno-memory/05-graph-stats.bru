@@ -1,0 +1,33 @@
+meta {
+  name: Graph statistics (graph_stats)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/query
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "tool": "graph_stats"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.isError: eq false
+  res.body.tool: eq graph_stats
+}
+
+tests {
+  test("stats answer is a non-empty string", function () {
+    expect(res.getBody().answer).to.be.a("string").and.to.have.length.greaterThan(0);
+  });
+}

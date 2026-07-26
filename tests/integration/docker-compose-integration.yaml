@@ -1,0 +1,66 @@
+####
+#### Reproducible, containerized integration suite.
+####
+#### One command, no host-side bru/curl/jq needed:
+####
+####   ./tests/integration/run-integration.sh              # SUITE=all
+####   SUITE=memory ./tests/integration/run-integration.sh # just T2
+####
+#### or directly:
+####
+####   docker compose -f tests/integration/docker-compose-integration.yaml \
+####     up --build --abort-on-container-exit --exit-code-from integration-tests \
+####     nats graphify-api graphify-cloner graphify-worker \
+####     graphify-memory-worker graphify-mcp integration-tests
+####
+#### `include:` pulls in the full base stack + the test override (auth off,
+#### code-only, debug logs). The `integration-tests` service is the runner: its
+#### command is a set of shell commands delivered via the read-only /suite volume
+#### mount (ci/run.sh), so specs/orchestration change WITHOUT an image rebuild.
+#### Its exit code (via --exit-code-from) is the suite result.
+####
+#### The worker images are built FROM the locally-built `graphify` base (which has
+#### `graphify extract` + `merge-graphs`), so build that first — the host wrapper
+#### run-integration.sh does `compose build graphify` before `up`.
+####
+include:
+  - ../../docker-compose.yaml
+  - ./docker-compose.test.yaml
+
+services:
+  integration-tests:
+    build:
+      context: .
+      dockerfile: ci/Dockerfile
+    # The suite lives on the volume, not in the image: edit a .bru spec or
+    # ci/run.sh and re-run — no rebuild. Read-only so tests can't mutate sources.
+    volumes:
+      - ./:/suite:ro
+    working_dir: /suite
+    # The "command is a set of shell commands" — kept here (referencing the
+    # mounted script) so it's visible with the compose definition.
+    command: ["bash", "ci/run.sh"]
+    environment:
+      # Reach services by compose DNS name over the shared network (not host ports).
+      BASE_URL: http://graphify-api:8080
+      CLONER_URL: http://graphify-cloner:8080
+      WORKER_URL: http://graphify-worker:8080
+      SUITE: ${SUITE:-all}
+      SAMPLE_REPO: ${SAMPLE_REPO:-https://github.com/githubtraining/hellogitworld}
+      APP_REPO: ${APP_REPO:-https://github.com/marcellodesales/azure-chatgpt-spa-service}
+      DEPLOY_REPO: ${DEPLOY_REPO:-https://github.com/marcellodesales/azure-chatgpt-spa-service-deploy}
+      MEMORY_QUESTION: ${MEMORY_QUESTION:-main}
+    depends_on:
+      nats:
+        condition: service_healthy
+      graphify-api:
+        condition: service_started
+      graphify-cloner:
+        condition: service_started
+      graphify-worker:
+        condition: service_started
+      graphify-memory-worker:
+        condition: service_started
+      graphify-mcp:
+        condition: service_started
+    restart: "no"

@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "graphify-service-memory-2repos",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

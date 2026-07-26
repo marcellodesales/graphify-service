@@ -1,0 +1,30 @@
+meta {
+  name: Merged graph contains both source repos
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/graph
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("unified graph is non-empty", function () {
+    expect(res.getBody().nodes).to.be.an("array").and.to.have.length.greaterThan(0);
+  });
+  test("both source repos are represented in the merged graph", function () {
+    const s = JSON.stringify(res.getBody());
+    const app = bru.getEnvVar("appSlug");
+    const deploy = bru.getEnvVar("deploySlug");
+    // deploy slug is a superset of the app slug, so match the app slug where it
+    // is NOT immediately followed by "-deploy" to prove both are present.
+    expect(s, "deploy repo present").to.include(deploy);
+    expect(s, "app repo present").to.match(new RegExp(app + "(?!-deploy)"));
+  });
+}

@@ -1,0 +1,33 @@
+meta {
+  name: Query the unified graph (query_graph)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/query
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "question": "{{question}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.isError: eq false
+  res.body.tool: eq query_graph
+}
+
+tests {
+  test("answer is a non-empty string", function () {
+    expect(res.getBody().answer).to.be.a("string").and.to.have.length.greaterThan(0);
+  });
+}
