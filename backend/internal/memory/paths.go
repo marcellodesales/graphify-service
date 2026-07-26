@@ -8,13 +8,16 @@ import "path/filepath"
 //
 //	<root>/<id>/
 //	  .git/                      # working repo; HEAD SHA is the returned GraphRef
-//	  .gitignore                 # ignores git/, files/, .tmp/ (raw working data)
+//	  .gitignore                 # ignores git/, files/, .tmp/, .ssh/ (working data)
 //	  README.md                  # committed at create
 //	  memory.json                # the manifest (this package's Metadata)
 //	  graphify-out/              # the merged unified graph (committed)
 //	    graph.json graph.html GRAPH_REPORT.md manifest.json
 //	  git/<host>/<owner>/<repo>/ # raw clone + graphify-out/graph.json (gitignored)
 //	  files/<name>/              # raw upload + graphify-out/graph.json (gitignored)
+//	  .ssh/<resourceId>          # caller-supplied deploy key for a private git
+//	                             # resource, mode 0600 (gitignored — never
+//	                             # committed, never in GraphRef, never extracted)
 //
 // The merged output lives at the conventional graphify-out/ directory name so the
 // existing artifacts package (Inventory/Select/Zip) and graphify.Enrich, which all
@@ -66,6 +69,26 @@ func (l Layout) FilesDir(id string) string { return filepath.Join(l.MemoryDir(id
 // must be a validated resource ID (hex), not the original filename.
 func (l Layout) FileResourceDir(id, name string) string {
 	return filepath.Join(l.FilesDir(id), name)
+}
+
+// SSHDir holds caller-supplied deploy keys for a memory's private git
+// resources. It is gitignored (see WriteScaffold) so keys are never committed
+// to the memory repo and never surface via GraphRef, and it lives OUTSIDE git/
+// and files/ so graphify never extracts a key into any graph.
+func (l Layout) SSHDir(id string) string { return filepath.Join(l.MemoryDir(id), ".ssh") }
+
+// SSHKeyPath is the stored deploy key for a single git resource, keyed by
+// resource ID. rid MUST be a validated resource ID (hex) — never caller free
+// text — since it is used to build this path.
+func (l Layout) SSHKeyPath(id, rid string) string {
+	return filepath.Join(l.SSHDir(id), rid)
+}
+
+// SSHKnownHostsPath is the optional stored known_hosts for a git resource. Host
+// keys are public (not a secret) and are stored alongside the key so a
+// caller-supplied key can verify its host without relying on global ops config.
+func (l Layout) SSHKnownHostsPath(id, rid string) string {
+	return filepath.Join(l.SSHDir(id), rid+".known_hosts")
 }
 
 // GraphOutDir is where the merged unified graph is written (committed). It uses

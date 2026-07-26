@@ -158,9 +158,25 @@ func (w *worker) handleResource(data events.MemoryEventData) error {
 		RunTimeout:   w.runTimeout(),
 		CodeOnly:     w.cfg.CodeOnly,
 	}
-	if res.Kind == memory.KindGit && res.Source.SSHKeyRef != "" {
-		opts.SSHKeyPath = filepath.Join(w.cfg.SSHRoot, res.Source.SSHKeyRef)
-		opts.KnownHosts = w.cfg.KnownHosts
+	// Resolve the SSH deploy key for a private git resource. The clone "task"
+	// carries the {repo, ref, key} combo: a caller-supplied key stored on our
+	// volume (keyed by resource id) takes precedence over an ops-provisioned key
+	// referenced by name on the read-only SSH secrets volume. On-disk presence is
+	// the source of truth — the key travels with the resource.
+	if res.Kind == memory.KindGit {
+		l := w.memStore.Layout()
+		switch {
+		case memory.HasResourceSSHKey(l, id, rid):
+			opts.SSHKeyPath = l.SSHKeyPath(id, rid)
+			if memory.HasResourceKnownHosts(l, id, rid) {
+				opts.KnownHosts = l.SSHKnownHostsPath(id, rid)
+			} else {
+				opts.KnownHosts = w.cfg.KnownHosts
+			}
+		case res.Source.SSHKeyRef != "":
+			opts.SSHKeyPath = filepath.Join(w.cfg.SSHRoot, res.Source.SSHKeyRef)
+			opts.KnownHosts = w.cfg.KnownHosts
+		}
 	}
 
 	var updated memory.Resource

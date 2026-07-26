@@ -25,8 +25,12 @@
   handled exactly like a repo: graphify's `detect.py` classifies/converts it and `graphify extract`
   turns it into graph nodes/edges. See [§6](#6-how-files-are-handled-not-rag).
 - **Secrets are never persisted.** No private keys, passphrases, tokens, or authenticated URLs are
-  written to `memory.json`. SSH keys are referenced by name and resolved from a mounted secret dir
-  at runtime only.
+  written to `memory.json`. A private repo is unlocked with an SSH deploy key supplied either by
+  **name** (`sshKeyRef` → a key on the mounted secret dir) or as **caller-supplied material**
+  (`sshKey`), which is stored on our own volume under `<memory>/.ssh/<rid>` (mode `0600`, gitignored)
+  and used only to run the clone — like a password on a protected zip, it travels with the task and
+  never lands in the manifest or the `graphRef`. See [§3.1](#31-add-a-git-source-1-or-more) and
+  [§9](#9-security).
 
 ---
 
@@ -58,6 +62,7 @@ before any filesystem lookup (path-traversal defense).
 | `POST /api/v1/memories/{id}/resources` | Add a source. **JSON body** → git resource; **`multipart/form-data`** (`file` field) → uploaded file. Persists, commits, publishes `resource.requested`. | `202` + `{memoryId,resourceId,kind,status,ref}` |
 | `GET /api/v1/memories/{id}/resources` | List resources. | `200` |
 | `GET /api/v1/memories/{id}/resources/{rid}` | Get one resource. | `200` |
+| `PUT /api/v1/memories/{id}/resources/{rid}/ssh-key` | Supply/replace a caller-supplied deploy key for a git resource (private repo). Body: `{"sshKey","knownHosts"}`. Stores the key on our volume, re-queues the resource for ingestion. | `202` + `{memoryId,resourceId,status,ref}` |
 | `GET /api/v1/memories/{id}/graph` | Stream the merged `graphify-out/graph.json`. | `200` / `409 not_ready` |
 | `POST /api/v1/memories/{id}/query` | Ask a question about the merged graph. Composes with `graphify-mcp` (see [§6.2](#62-querying-a-memory-mcp-composition)). Body: `{"question","tool"}`. | `200` / `409 not_ready` |
 | `GET /api/v1/memories/{id}/artifacts` | List merged artifacts. | `200` |
@@ -69,15 +74,38 @@ before any filesystem lookup (path-traversal defense).
 ```jsonc
 // POST /api/v1/memories/{id}/resources   Content-Type: application/json
 {
-  "gitRepoUrl": "https://github.com/acme/widget.git",
-  "ref": "main",              // optional — branch/tag
-  "sha": "",                  // optional — exact commit (mutually exclusive with ref)
-  "sshKeyRef": "acme-deploy"  // optional — NAME of a mounted key; the key itself is never stored
+  "gitRepoUrl": "git@github.com:acme/widget.git",
+  "ref": "main",               // optional — branch/tag
+  "sha": "",                   // optional — exact commit (mutually exclusive with ref)
+
+  // Private repo? Supply a deploy key ONE of two ways (mutually exclusive):
+  "sshKeyRef": "acme-deploy",  // (a) NAME of an ops-provisioned key on the mounted secret dir
+  "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----",
+                               // (b) caller-supplied PEM; stored on our volume, never in the manifest
+  "knownHosts": "github.com ssh-ed25519 AAAA…"  // optional — host's public key (not a secret)
 }
 ```
 
-Host allow-listing (`GRAPHIFY_ALLOWED_GIT_HOSTS`) is enforced. `sshKeyRef` must be a simple name
-(no path separators); its presence marks the source `private: true`.
+Host allow-listing (`GRAPHIFY_ALLOWED_GIT_HOSTS`) is enforced. Either key option marks the source
+`private: true`.
+
+- **`sshKeyRef`** — a simple name (no path separators). At clone time the worker resolves it under
+  `GRAPHIFY_SSH_ROOT` (the read-only SSH secrets volume). Nothing key-shaped is ever stored by us.
+- **`sshKey`** — the private key material itself. The API validates it *looks* like a private key
+  (rejects public keys and passphrase-only blobs), then writes it under `<memory>/.ssh/<rid>`
+  (mode `0600`) on our own volume. **The clone "task" carries the `{repo, ref, key}` combo:** the key
+  travels with the resource exactly like a password on a protected zip — used transiently to unlock
+  the clone, never written to `memory.json`, never committed, never reachable via `graphRef` or the
+  artifact/download routes. Only a non-secret `sshKeyStored: true` flag is recorded. A passphrase is
+  never accepted or stored (`BatchMode=yes` means a passphrase-protected key simply fails the clone).
+- **`knownHosts`** — the repo host's public host key(s), stored alongside the key at
+  `<memory>/.ssh/<rid>.known_hosts`. Public information, but required to satisfy
+  `StrictHostKeyChecking=yes` when a caller-supplied key clones a real host like `github.com`.
+  Falls back to the worker's `GRAPHIFY_KNOWN_HOSTS` when omitted.
+
+To add or rotate a caller-supplied key for an **existing** git resource, `PUT`
+`/api/v1/memories/{id}/resources/{rid}/ssh-key` with `{"sshKey","knownHosts"}`: the key is stored the
+same way and the resource is re-queued for ingestion (`202`).
 
 ### 3.2 Add a file source
 
@@ -153,7 +181,7 @@ A memory lives at `<repos-root>/memories/<id>/`, which is itself a git repo:
 ```
 <root>/<id>/
   .git/                        # working repo; HEAD SHA is the returned GraphRef
-  .gitignore                   # ignores git/, files/, .tmp/ (raw working data)
+  .gitignore                   # ignores git/, files/, .tmp/, .ssh/ (raw working data + keys)
   README.md                    # committed at create
   memory.json                  # the manifest (Memory struct; NO secrets)
   graphify-out/                # ← the merged unified graph (COMMITTED)
@@ -161,11 +189,15 @@ A memory lives at `<repos-root>/memories/<id>/`, which is itself a git repo:
     graph.html GRAPH_REPORT.md graph.graphml graph.svg   # best-effort enrich
   git/<host>/<owner>/<repo>/   # raw clone + its own graphify-out/ (GITIGNORED)
   files/<resourceId>/          # raw upload + its own graphify-out/ (GITIGNORED)
+  .ssh/<rid>                   # caller-supplied deploy key, mode 0600 (GITIGNORED)
+  .ssh/<rid>.known_hosts       # host public keys for that resource (GITIGNORED)
   .tmp/                        # staging for clones + merge label dirs (GITIGNORED)
 ```
 
-Only `memory.json` and `graphify-out/` are versioned. Raw clones/uploads are gitignored (large,
-may carry nested `.git`, reproducible), so the `graphRef` is a clean pointer to the graph state.
+Only `memory.json` and `graphify-out/` are versioned. Raw clones/uploads and the `.ssh/` key store
+are gitignored (large, may carry nested `.git`, reproducible — and, for `.ssh/`, secret), so the
+`graphRef` is a clean pointer to the graph state and never exposes key material. `.ssh/` lives
+outside both `git/` and `files/`, so a stored key is never fed to `graphify extract` either.
 
 The merged output deliberately uses the conventional `graphify-out/` name so the existing
 `artifacts` package (`Inventory`/`Select`/`Zip`) and `graphify.Enrich` — which all read
@@ -334,8 +366,16 @@ a repo and a PDF, or across two repos, into one queryable neighborhood.
 ## 9. Security
 
 - **No secrets in metadata.** `Memory`, `Resource`, and `repository.Source` never carry private
-  keys, passphrases, tokens, or authenticated URLs. Git auth uses `sshKeyRef` (a name); the key is
-  read from the mounted `GRAPHIFY_SSH_ROOT` at runtime and passed via `IngestOptions` only.
+  keys, passphrases, tokens, or authenticated URLs. Git auth uses either `sshKeyRef` (a name, resolved
+  from the mounted `GRAPHIFY_SSH_ROOT` at runtime) or a caller-supplied `sshKey`. Only the non-secret
+  `sshKeyStored: true` flag is persisted; either way the key reaches the clone via `IngestOptions`
+  only.
+- **Caller-supplied keys are quarantined.** An `sshKey` is validated to *look* like a private key
+  (public keys rejected), then written to `<memory>/.ssh/<rid>` at mode `0600` via a temp-file +
+  `Rename`. That path is gitignored (never committed, never in `graphRef`), lives outside `git/` and
+  `files/` (never extracted into any graph), and is not in `Artifacts` (never downloadable). The
+  worker treats on-disk presence as the source of truth — the key "travels with the task." A
+  passphrase is never accepted or stored.
 - **Path-traversal defense.** Every id/rid used in a filesystem path is validated hex first
   (`ValidID`/`ValidResourceID`); git host/owner/repo come only from `giturl.Parse`; uploads use the
   resource id (not the client filename) as the directory, and `filepath.Base` strips path

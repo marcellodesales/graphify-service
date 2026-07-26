@@ -169,8 +169,17 @@ func (s *Server) addGitResource(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	sshKeyRef := strings.TrimSpace(req.SSHKeyRef)
+	sshKey := strings.TrimSpace(req.SSHKey)
+	if sshKeyRef != "" && sshKey != "" {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "provide either sshKeyRef (a provisioned key name) or sshKey (the key material), not both")
+		return
+	}
 	if sshKeyRef != "" && !validKeyRef(sshKeyRef) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "sshKeyRef must be a simple name (no path separators)")
+		return
+	}
+	if sshKey != "" && !memory.LooksLikePrivateKey([]byte(sshKey)) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "sshKey must be a PEM private key (not a public key)")
 		return
 	}
 
@@ -179,6 +188,21 @@ func (s *Server) addGitResource(w http.ResponseWriter, r *http.Request, id strin
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to allocate resource id")
 		return
 	}
+
+	// Store caller-supplied key material on our volume BEFORE the resource is
+	// published for ingestion, so the worker finds it. The key is written under
+	// the memory's gitignored .ssh/ dir (mode 0600) and never persisted in the
+	// manifest — only the non-secret SSHKeyStored flag records its presence.
+	sshKeyStored := false
+	if sshKey != "" {
+		if err := memory.WriteResourceSSHKey(s.memStore.Layout(), id, rid, []byte(sshKey), []byte(req.KnownHosts)); err != nil {
+			s.logger.Error("store resource ssh key", "request_id", RequestIDFrom(r.Context()), "id", id, "resource", rid, "error", err)
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to store ssh key")
+			return
+		}
+		sshKeyStored = true
+	}
+
 	res := memory.Resource{
 		ID:       rid,
 		Kind:     memory.KindGit,
@@ -190,8 +214,9 @@ func (s *Server) addGitResource(w http.ResponseWriter, r *http.Request, id strin
 			OwnerPath:     repo.Owner,
 			Repository:    repo.Name,
 			Transport:     string(repo.Transport),
-			Private:       sshKeyRef != "",
+			Private:       sshKeyRef != "" || sshKeyStored,
 			SSHKeyRef:     sshKeyRef,
+			SSHKeyStored:  sshKeyStored,
 		},
 	}
 	s.appendResource(w, r, id, res)
@@ -312,6 +337,101 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeError(w, r, http.StatusNotFound, "not_found", "resource not found")
+}
+
+// handleSetResourceSSHKey implements PUT
+// /api/v1/memories/{id}/resources/{rid}/ssh-key. It stores (or replaces) the
+// caller-supplied deploy key for an existing git resource on our volume and
+// re-queues that resource so the worker retries the clone with the key. The key
+// bytes are written under the memory's gitignored .ssh/ dir (mode 0600) and are
+// never persisted in the manifest — only the non-secret SSHKeyStored flag is.
+func (s *Server) handleSetResourceSSHKey(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	rid := r.PathValue("rid")
+	if !memory.ValidID(id) || !memory.ValidResourceID(rid) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid memory or resource id")
+		return
+	}
+	m, err := s.memStore.Get(id)
+	if err != nil {
+		if errors.Is(err, memory.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "memory not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read memory")
+		return
+	}
+	var found *memory.Resource
+	for i := range m.Resources {
+		if m.Resources[i].ID == rid {
+			found = &m.Resources[i]
+			break
+		}
+	}
+	if found == nil {
+		writeError(w, r, http.StatusNotFound, "not_found", "resource not found")
+		return
+	}
+	if found.Kind != memory.KindGit {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "ssh keys apply only to git resources")
+		return
+	}
+
+	var req setResourceSSHKeyRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "malformed JSON body: "+err.Error())
+		return
+	}
+	sshKey := strings.TrimSpace(req.SSHKey)
+	if !memory.LooksLikePrivateKey([]byte(sshKey)) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "sshKey must be a PEM private key (not a public key)")
+		return
+	}
+	if err := memory.WriteResourceSSHKey(s.memStore.Layout(), id, rid, []byte(sshKey), []byte(req.KnownHosts)); err != nil {
+		s.logger.Error("store resource ssh key", "request_id", RequestIDFrom(r.Context()), "id", id, "resource", rid, "error", err)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to store ssh key")
+		return
+	}
+
+	// Re-queue the resource so the worker re-attempts the clone with the key.
+	// Setting status away from ready is what makes handleResource re-extract
+	// (rather than short-circuit to merge) on the re-published request.
+	if _, err := s.memStore.UpdateResource(id, rid, func(res *memory.Resource) error {
+		res.Source.Private = true
+		res.Source.SSHKeyStored = true
+		res.Status = repository.StatusQueued
+		res.Stage = "queued"
+		res.Failure = nil
+		return nil
+	}); err != nil {
+		s.logger.Error("requeue resource", "request_id", RequestIDFrom(r.Context()), "id", id, "resource", rid, "error", err)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to update resource")
+		return
+	}
+
+	ref := s.commitMemory(id, "memory: set ssh key for resource "+rid)
+
+	if s.bus != nil {
+		// The fresh commit ref makes the message id unique per re-key so
+		// JetStream delivers it instead of deduplicating against the original.
+		msgID := "memory-resource-request:" + id + ":" + rid
+		if ref != "" {
+			msgID += ":" + ref
+		}
+		if err := s.bus.PublishMemory(events.SubjectMemoryResourceRequested, msgID,
+			events.MemoryEventData{MemoryID: id, ResourceID: rid}); err != nil {
+			s.logger.Error("publish memory.resource.requested (rekey)", "id", id, "resource", rid, "error", err)
+		}
+	}
+
+	writeJSON(w, r, http.StatusAccepted, setResourceSSHKeyResponse{
+		MemoryID:   id,
+		ResourceID: rid,
+		Status:     string(repository.StatusQueued),
+		Ref:        ref,
+	})
 }
 
 // handleMemoryGraph serves the merged unified graph (graphify-out/graph.json).

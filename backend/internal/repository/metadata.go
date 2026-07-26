@@ -32,7 +32,8 @@ type Source struct {
 	Repository        string `json:"repository"`
 	Transport         string `json:"transport"`
 	Private           bool   `json:"private"`
-	SSHKeyRef         string `json:"sshKeyRef,omitempty"`
+	SSHKeyRef         string `json:"sshKeyRef,omitempty"`    // name of an ops-provisioned key on the SSH volume
+	SSHKeyStored      bool   `json:"sshKeyStored,omitempty"` // a caller-supplied deploy key is stored on our volume (the key material itself is NEVER persisted here — see the type doc)
 	DefaultBranch     string `json:"defaultBranch,omitempty"`     // resolved at clone time
 	HasCommittedGraph bool   `json:"hasCommittedGraph,omitempty"` // repo already contains graphify-out/
 	GraphOutPath      string `json:"graphOutPath,omitempty"`      // relative, e.g. graphify-out

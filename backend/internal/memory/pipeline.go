@@ -41,7 +41,9 @@ func WriteScaffold(l Layout, m Memory) error {
 	gitignore := "# graphify-service memory — raw working data is not versioned.\n" +
 		"# Only memory.json (manifest) and graphify-out/ (merged graph) are committed,\n" +
 		"# so the git HEAD SHA (GraphRef) is a stable pointer to the graph state.\n" +
-		"/git/\n/files/\n/.tmp/\n"
+		"# .ssh/ holds caller-supplied private deploy keys — it MUST stay ignored so\n" +
+		"# key material is never committed or exposed via GraphRef.\n" +
+		"/git/\n/files/\n/.tmp/\n/.ssh/\n"
 	if err := os.WriteFile(l.GitignorePath(m.ID), []byte(gitignore), 0o644); err != nil {
 		return fmt.Errorf("memory: write .gitignore: %w", err)
 	}
