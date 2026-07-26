@@ -32,6 +32,7 @@ type memoryLinks struct {
 	Self        string `json:"self"`
 	Resources   string `json:"resources"`
 	Graph       string `json:"graph"`
+	Query       string `json:"query"`
 	Artifacts   string `json:"artifacts"`
 	DownloadZip string `json:"downloadZip"`
 }

@@ -166,10 +166,15 @@ services:
 
   # ── Graphify MCP query server (PRD-004) ────────────────────────────────────
   # Serves graphify's query tools (query_graph, get_node, graph_stats, …) over
-  # Streamable HTTP for the whole shared repos volume. The API's /query endpoint
-  # composes with it, injecting project_path per repo. Stateless + json-response
-  # so a single stateless tools/call works (no session). Boots with a bogus graph
-  # path — real queries pass project_path. Reuses the graphify image (has mcp).
+  # Streamable HTTP for the whole shared repos volume. Both the API's repository
+  # /query AND memory /query endpoints compose with it, injecting project_path
+  # per call: a repo dir resolves <repo>/graphify-out/graph.json, a memory dir
+  # resolves memories/<id>/graphify-out/graph.json (the merged, cross-source
+  # unified graph). One stateless server answers for either — no memory-specific
+  # MCP service needed, because it mounts the same ./data/repos volume the memory
+  # worker writes the unified graph to. Stateless + json-response so a single
+  # stateless tools/call works (no session). Boots with a bogus graph path — real
+  # queries pass project_path. Reuses the graphify image (has mcp).
   graphify-mcp:
     image: marcellodesales/graphify
     build:

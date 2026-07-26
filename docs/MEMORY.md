@@ -59,6 +59,7 @@ before any filesystem lookup (path-traversal defense).
 | `GET /api/v1/memories/{id}/resources` | List resources. | `200` |
 | `GET /api/v1/memories/{id}/resources/{rid}` | Get one resource. | `200` |
 | `GET /api/v1/memories/{id}/graph` | Stream the merged `graphify-out/graph.json`. | `200` / `409 not_ready` |
+| `POST /api/v1/memories/{id}/query` | Ask a question about the merged graph. Composes with `graphify-mcp` (see [§6.2](#62-querying-a-memory-mcp-composition)). Body: `{"question","tool"}`. | `200` / `409 not_ready` |
 | `GET /api/v1/memories/{id}/artifacts` | List merged artifacts. | `200` |
 | `GET /api/v1/memories/{id}/artifacts/{name}` | Stream one allowlisted artifact. | `200` |
 | `GET /api/v1/memories/{id}/download?format=zip` | Zip of merged artifacts (`include`/`exclude` filters). | `200` / `409 not_ready` |
@@ -98,7 +99,27 @@ curl -sX POST .../api/v1/memories/$ID/resources -d '{"gitRepoUrl":"https://githu
 curl -sX POST .../api/v1/memories/$ID/resources -F "file=@rfc-042.pdf"
 # …poll until status == ready…
 curl -s .../api/v1/memories/$ID/graph -o unified-graph.json
+# …then ask questions across all sources at once:
+curl -sX POST .../api/v1/memories/$ID/query -d '{"question":"where is auth handled?"}'
 ```
+
+### 3.4 Query a memory
+
+```jsonc
+// POST /api/v1/memories/{id}/query   Content-Type: application/json
+{
+  "question": "how does the widget service talk to the API?",  // required for query_graph
+  "tool": "query_graph"   // optional — default; also get_node, graph_stats, god_nodes, …
+}
+```
+
+```jsonc
+// 200 response
+{ "id": "<memoryId>", "tool": "query_graph", "question": "…", "answer": "…", "isError": false }
+```
+
+`409 not_ready` until the merged graph exists. See [§6.2](#62-querying-a-memory-mcp-composition)
+for how the answer is produced.
 
 ---
 
@@ -198,6 +219,41 @@ flowchart LR
 
 > If a git repo already ships a committed `graphify-out/`, extraction is **skipped** and the
 > committed graph is used as-is.
+
+### 6.2 Querying a memory (MCP composition)
+
+`POST /api/v1/memories/{id}/query` answers questions about the merged graph using the **same
+`graphify-mcp` server** that serves repository queries — there is **no memory-specific MCP service**.
+
+graphify's MCP server (`graphify.serve`) runs **stateless** with `--json-response`, and every tool
+call resolves its graph from a per-call `project_path`: `<project_path>/graphify-out/graph.json`.
+The API injects `project_path = <repos-root>/memories/<id>` (the memory dir), so the one shared
+server resolves that memory's **merged, cross-source unified graph** — exactly what the memory
+worker committed. Because `graphify-mcp` and the memory worker mount the **same `./data/repos`
+volume**, no copying or extra plumbing is needed.
+
+This is identical to the repository `/query` composition, only the injected `project_path` differs
+(a memory dir instead of a repo dir). Available tools: `query_graph` (default; needs `question`),
+`get_node`, `get_neighbors`, `get_community`, `god_nodes`, `graph_stats`, `shortest_path`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Client
+    participant API as graphify-api
+    participant MCP as graphify-mcp (stateless)
+    participant V as ./data/repos (shared volume)
+
+    U->>API: POST /memories/{id}/query {question}
+    Note over API: guard ValidID(id); require status == ready
+    API->>MCP: tools/call query_graph<br/>project_path = memories/{id}
+    MCP->>V: read memories/{id}/graphify-out/graph.json
+    MCP-->>API: answer (text content)
+    API-->>U: 200 {id, tool, question, answer, isError}
+```
+
+> The endpoint returns `409 not_ready` until the memory reaches `ready` (the merged graph must
+> exist before a query can resolve it).
 
 ---
 
@@ -302,10 +358,20 @@ a repo and a PDF, or across two repos, into one queryable neighborhood.
 | `GRAPHIFY_SSH_ROOT` | `/run/secrets/graphify-ssh` | worker | Where `sshKeyRef` names resolve. |
 | `GRAPHIFY_KNOWN_HOSTS` | — | worker | Optional SSH known_hosts file. |
 | `NATS_URL` | `nats://nats:4222` | api, worker | Async backbone. |
+| `GRAPHIFY_MCP_URL` | `http://graphify-mcp:8080/mcp` | api | graphify-mcp endpoint the `/query` composition calls. |
 
 Local stack: the `graphify-memory-worker` service in `docker-compose.yaml` (status on
 `${GRAPHIFY_MEMORY_WORKER_PORT:-8084}`) mounts `./data/repos` and read-only `./secrets/ssh`, and is
-built `FROM` the graphify image so `graphify extract`, `merge-graphs`, and `git` are on PATH.
+built `FROM` the graphify image so `graphify extract`, `merge-graphs`, and `git` are on PATH. The
+`graphify-mcp` service (`${GRAPHIFY_MCP_PORT:-8083}`) mounts the **same** `./data/repos`, so it can
+resolve any memory's `graphify-out/graph.json` for `/query` without extra wiring.
+
+**Integration test (T2):** `tests/integration/run-memory.sh` brings up `nats + graphify-api +
+graphify-memory-worker + graphify-mcp` (via the `docker-compose.test.yaml` override), creates a
+memory, adds a public git source, polls until `ready`, fetches the merged graph, then asserts a
+non-empty answer from `POST /memories/{id}/query` (and a `graph_stats` call) — end-to-end proof of
+the memory-aware MCP composition. Run: `./tests/integration/run-memory.sh` (`KEEP_STACK=1` to leave
+it up).
 
 ---
 
@@ -350,8 +416,9 @@ stream to consume.
 ## 12. Scope & deferrals
 
 **In this phase:** the memory abstraction at the API level — create, add git/file sources, schedule
-graph generation, and the merged unified graph at a centralized location, plus the async worker and
-local compose wiring.
+graph generation, the merged unified graph at a centralized location, and **Q&A over that graph via
+the shared graphify-mcp composition** (`POST /memories/{id}/query`), plus the async worker and local
+compose wiring (incl. the T2 integration test).
 
 **Deferred (not this PR):**
 

@@ -32,6 +32,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/memories/{id}/resources", s.protect(s.handleListResources))
 	mux.HandleFunc("GET /api/v1/memories/{id}/resources/{rid}", s.protect(s.handleGetResource))
 	mux.HandleFunc("GET /api/v1/memories/{id}/graph", s.protect(s.handleMemoryGraph))
+	mux.HandleFunc("POST /api/v1/memories/{id}/query", s.protect(s.handleMemoryQuery))
 	mux.HandleFunc("GET /api/v1/memories/{id}/artifacts", s.protect(s.handleMemoryArtifacts))
 	mux.HandleFunc("GET /api/v1/memories/{id}/artifacts/{name}", s.protect(s.handleMemoryArtifactFile))
 	mux.HandleFunc("GET /api/v1/memories/{id}/download", s.protect(s.handleMemoryDownload))

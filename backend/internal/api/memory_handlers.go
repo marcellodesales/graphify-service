@@ -14,6 +14,7 @@ import (
 	"github.com/marcellodesales/graphify-service/backend/internal/artifacts"
 	"github.com/marcellodesales/graphify-service/backend/internal/events"
 	"github.com/marcellodesales/graphify-service/backend/internal/giturl"
+	"github.com/marcellodesales/graphify-service/backend/internal/mcpproxy"
 	"github.com/marcellodesales/graphify-service/backend/internal/memory"
 	"github.com/marcellodesales/graphify-service/backend/internal/repository"
 )
@@ -336,6 +337,72 @@ func (s *Server) handleMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
+// handleMemoryQuery implements POST /api/v1/memories/{id}/query. It composes
+// with the shared graphify-mcp server exactly like the repository /query
+// endpoint, but injects project_path = the memory directory so the MCP resolves
+// <memory>/graphify-out/graph.json — the merged, cross-source unified graph.
+// This is the "memory-aware MCP" integration: no new MCP service, the existing
+// stateless server answers Q&A against any memory on the shared repos volume.
+func (s *Server) handleMemoryQuery(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !memory.ValidID(id) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "invalid memory id")
+		return
+	}
+	m, err := s.memStore.Get(id)
+	if err != nil {
+		if errors.Is(err, memory.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "not_found", "memory not found")
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read memory")
+		return
+	}
+	if m.Status != memory.StatusReady {
+		writeError(w, r, http.StatusConflict, "not_ready", "memory is not ready (status: "+string(m.Status)+")")
+		return
+	}
+
+	var req queryRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "malformed JSON body: "+err.Error())
+		return
+	}
+	tool := strings.TrimSpace(req.Tool)
+	if tool == "" {
+		tool = "query_graph"
+	}
+	question := strings.TrimSpace(req.Question)
+	if tool == "query_graph" && question == "" {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "question is required for query_graph")
+		return
+	}
+
+	// Inject project_path so the shared graphify-mcp resolves this memory's
+	// unified graph (<memory>/graphify-out/graph.json) for the call.
+	args := map[string]any{"project_path": s.memStore.Layout().MemoryDir(id)}
+	if question != "" {
+		args["question"] = question
+	}
+
+	client := mcpproxy.New(s.cfg.MCPURL)
+	answer, isErr, err := client.CallTool(r.Context(), tool, args)
+	if err != nil {
+		s.logger.Error("memory query", "request_id", RequestIDFrom(r.Context()), "id", id, "tool", tool, "error", err)
+		writeError(w, r, http.StatusBadGateway, "query_backend_error", "graph query backend error")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, queryResponse{
+		ID:       id,
+		Tool:     tool,
+		Question: question,
+		Answer:   answer,
+		IsError:  isErr,
+	})
+}
+
 // handleMemoryArtifacts implements GET /api/v1/memories/{id}/artifacts.
 func (s *Server) handleMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 	m, ok := s.loadMemory(w, r)
@@ -468,6 +535,7 @@ func memViewFor(m memory.Memory) memoryView {
 			Self:        memPath(m.ID),
 			Resources:   memPath(m.ID) + "/resources",
 			Graph:       memPath(m.ID) + "/graph",
+			Query:       memPath(m.ID) + "/query",
 			Artifacts:   memPath(m.ID) + "/artifacts",
 			DownloadZip: memPath(m.ID) + "/download?format=zip",
 		},
