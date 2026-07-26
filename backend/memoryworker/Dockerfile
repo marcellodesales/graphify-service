@@ -25,6 +25,13 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/graphify-memory-wo
 FROM ${GRAPHIFY_IMAGE} AS runtime
 # COPY runs as root during build; the graphify image otherwise runs as uid 10001.
 USER root
+# The graphify base (python:3.12-slim) ships no VCS tooling, but this worker is
+# self-contained: unlike the single-repo pipeline (where graphify-cloner clones),
+# it clones each git resource AND commits the memory repo itself. So it needs git
+# + openssh-client (the latter for deploy-key SSH clones) on PATH.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/graphify-memory-worker /usr/local/bin/graphify-memory-worker
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/graphify-memory-worker"]
