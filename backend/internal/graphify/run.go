@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -38,6 +39,31 @@ func Extract(ctx context.Context, opts ExtractOptions) (string, error) {
 		return out, fmt.Errorf("graphify extract: %v", err)
 	}
 	return out, nil
+}
+
+// Merge runs `graphify merge-graphs <in1> <in2> … --out <out>`, combining two or
+// more per-source graph.json files into one cross-source graph. graphify tags
+// each input by its parent directory name (disambiguating collisions) so
+// same-stem entities from different sources don't collapse, prefixes node ids as
+// <tag>::<id>, and resolves cross-source calls by label. It requires at least
+// two inputs; for a single source the caller should copy the graph directly.
+// Returns a bounded tail of combined output.
+func Merge(ctx context.Context, inputs []string, out string, timeout time.Duration) (string, error) {
+	if len(inputs) < 2 {
+		return "", fmt.Errorf("graphify merge-graphs: need at least 2 input graphs, got %d", len(inputs))
+	}
+	if timeout <= 0 {
+		timeout = 60 * time.Minute
+	}
+	args := append([]string{"merge-graphs"}, inputs...)
+	args = append(args, "--out", out)
+	// Inputs and out are absolute, so the working directory is immaterial; use
+	// the output's directory so any relative fallback stays contained.
+	res, err := run(ctx, filepath.Dir(out), timeout, args...)
+	if err != nil {
+		return res, fmt.Errorf("graphify merge-graphs: %v", err)
+	}
+	return res, nil
 }
 
 // EnrichResult reports which enrichment steps failed (best-effort; never fatal).

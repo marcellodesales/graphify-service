@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,20 @@ type Config struct {
 	SSHRoot         string        // GRAPHIFY_SSH_ROOT
 	KnownHosts      string        // GRAPHIFY_KNOWN_HOSTS
 	MCPURL          string        // GRAPHIFY_MCP_URL (graphify-mcp Streamable HTTP endpoint)
+
+	// Memory abstraction (multi-source unified graph).
+	MemoriesSubdir string        // GRAPHIFY_MEMORIES_SUBDIR (relative to ReposRoot)
+	MaxUploadBytes int64         // GRAPHIFY_MAX_UPLOAD_BYTES (file-resource uploads)
+	MemoryTimeout  time.Duration // GRAPHIFY_MEMORY_TIMEOUT (per merge/extract run)
+}
+
+// MemoriesRoot is the absolute root under which memories are stored.
+func (c Config) MemoriesRoot() string {
+	sub := c.MemoriesSubdir
+	if sub == "" {
+		sub = "memories"
+	}
+	return filepath.Join(c.ReposRoot, sub)
 }
 
 // Load reads configuration from the environment, applies defaults, and validates.
@@ -61,17 +76,26 @@ func Load() (Config, error) {
 		SSHRoot:         getenv("GRAPHIFY_SSH_ROOT", "/run/secrets/graphify-ssh"),
 		KnownHosts:      os.Getenv("GRAPHIFY_KNOWN_HOSTS"),
 		MCPURL:          getenv("GRAPHIFY_MCP_URL", "http://graphify-mcp:8080/mcp"),
+		MemoriesSubdir:  getenv("GRAPHIFY_MEMORIES_SUBDIR", "memories"),
 	}
 
 	var err error
 	if c.MaxRequestBytes, err = parseSize(getenv("GRAPHIFY_MAX_REQUEST_BYTES", "1MiB")); err != nil {
 		return Config{}, fmt.Errorf("GRAPHIFY_MAX_REQUEST_BYTES: %w", err)
 	}
+	// Uploaded file resources can be much larger than a JSON request body (PDFs,
+	// docs), so they get their own generous limit.
+	if c.MaxUploadBytes, err = parseSize(getenv("GRAPHIFY_MAX_UPLOAD_BYTES", "100MiB")); err != nil {
+		return Config{}, fmt.Errorf("GRAPHIFY_MAX_UPLOAD_BYTES: %w", err)
+	}
 	if c.CloneTimeout, err = time.ParseDuration(getenv("GRAPHIFY_CLONE_TIMEOUT", "10m")); err != nil {
 		return Config{}, fmt.Errorf("GRAPHIFY_CLONE_TIMEOUT: %w", err)
 	}
 	if c.RunTimeout, err = time.ParseDuration(getenv("GRAPHIFY_RUN_TIMEOUT", "60m")); err != nil {
 		return Config{}, fmt.Errorf("GRAPHIFY_RUN_TIMEOUT: %w", err)
+	}
+	if c.MemoryTimeout, err = time.ParseDuration(getenv("GRAPHIFY_MEMORY_TIMEOUT", "60m")); err != nil {
+		return Config{}, fmt.Errorf("GRAPHIFY_MEMORY_TIMEOUT: %w", err)
 	}
 
 	if err := c.validate(); err != nil {
@@ -101,6 +125,9 @@ func (c Config) validate() error {
 	}
 	if c.MaxRequestBytes <= 0 {
 		return fmt.Errorf("GRAPHIFY_MAX_REQUEST_BYTES must be positive")
+	}
+	if c.MaxUploadBytes <= 0 {
+		return fmt.Errorf("GRAPHIFY_MAX_UPLOAD_BYTES must be positive")
 	}
 	return nil
 }

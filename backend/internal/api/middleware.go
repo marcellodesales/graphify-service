@@ -99,14 +99,24 @@ func withLogging(logger *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
-// withBodyLimit caps the request body size.
+// withBodyLimit caps the request body size. The memory resource endpoint is
+// exempt because it accepts large multipart file uploads and enforces its own
+// (larger) MaxUploadBytes cap inside the handler.
 func withBodyLimit(max int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil {
+		if r.Body != nil && !bypassGlobalBodyLimit(r) {
 			r.Body = http.MaxBytesReader(w, r.Body, max)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// bypassGlobalBodyLimit reports whether a request should skip the global body
+// limit (only POST .../memories/{id}/resources, which caps itself).
+func bypassGlobalBodyLimit(r *http.Request) bool {
+	return r.Method == http.MethodPost &&
+		strings.HasPrefix(r.URL.Path, "/api/v1/memories/") &&
+		strings.HasSuffix(r.URL.Path, "/resources")
 }
 
 // authenticator validates bearer credentials on protected routes.

@@ -19,6 +19,7 @@ import (
 	"github.com/marcellodesales/graphify-service/backend/internal/api"
 	"github.com/marcellodesales/graphify-service/backend/internal/config"
 	"github.com/marcellodesales/graphify-service/backend/internal/events"
+	"github.com/marcellodesales/graphify-service/backend/internal/memory"
 	"github.com/marcellodesales/graphify-service/backend/internal/repository"
 	"github.com/marcellodesales/graphify-service/backend/internal/telemetry"
 )
@@ -42,6 +43,11 @@ func run() error {
 		return err
 	}
 
+	memStore, err := memory.NewStore(cfg.MemoriesRoot())
+	if err != nil {
+		return err
+	}
+
 	// Connect to NATS to drive the async pipeline. If NATS is unavailable the
 	// API still serves (submissions persist as queued) but won't publish.
 	var bus api.Publisher
@@ -52,7 +58,7 @@ func run() error {
 		defer b.Close()
 	}
 
-	srv := api.NewServer(cfg, store, logger, bus)
+	srv := api.NewServer(cfg, store, memStore, logger, bus)
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Handler(),
