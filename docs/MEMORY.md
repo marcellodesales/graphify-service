@@ -373,6 +373,26 @@ non-empty answer from `POST /memories/{id}/query` (and a `graph_stats` call) —
 the memory-aware MCP composition. Run: `./tests/integration/run-memory.sh` (`KEEP_STACK=1` to leave
 it up).
 
+**Integration test (T3 — cross-repo correlation):** `tests/integration/run-memory-2repos.sh` builds
+**one** memory out of **two** related repos — [`azure-chatgpt-spa-service`](https://github.com/marcellodesales/azure-chatgpt-spa-service)
+(the UI/app, whose `docker-compose.yml` *builds* the image
+`…/gpt/services/openai/azure-openai-spa-service`) and
+[`azure-chatgpt-spa-service-deploy`](https://github.com/marcellodesales/azure-chatgpt-spa-service-deploy)
+(the kustomize deploy infra, whose `base/deployment-base.yaml` *deploys* that same image in
+Kubernetes on port 3000, wired via `base/kustomization.yaml`). After merge, it asks *"when a feature
+is implemented, how is it made available in Kubernetes and where?"* The docker image reference is the
+entity that links the two repos: built in the app repo, deployed by the deploy repo's kustomization.
+Because the service is **not LLM-backed** — the memory worker runs `graphify --code-only` (local AST,
+no key), so `query_graph` does structural/keyword matching, not natural-language reasoning — the test
+*hard-asserts the guarantees* (both repos cloned + extracted + merged, non-empty unified graph, both
+repo slugs present, non-error answers) and *reports* the specific image↔Kubernetes correlation as
+`PRESENT`/`absent` (informational, so the build stays deterministic regardless of how deeply the AST
+extractor indexes YAML string values). Manual pre-analysis of the two repos was only needed to author
+precise test expectations; the running service ingests **whatever** repo is dropped and extracts it
+structurally — a future *classifier service* (GitHub repo API for an initial profile, then a
+full-content pass) will replace any need for that up-front knowledge. Run:
+`./tests/integration/run-memory-2repos.sh` (`KEEP_STACK=1` to leave it up).
+
 ---
 
 ## 11. Is this GraphRAG? — the roadmap
