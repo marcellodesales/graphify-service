@@ -35,8 +35,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-FILE="tests/integration/docker-compose-integration.yaml"
-COMPOSE=(docker compose -f "$FILE")
+# Explicit -f override chain (base → test override → integration runner). We do
+# NOT use compose `include:`: it requires imported files to be disjoint, and both
+# the base and the test override define graphify-worker, which older Docker Compose
+# (e.g. the CI runner) rejects with "conflicts with imported resource". The -f
+# chain merges same-named services reliably on every version. Order matters: later
+# files override earlier ones. All three are repo-root-relative (we cd $ROOT above),
+# so the project directory is the repo root and every relative path resolves there.
+COMPOSE=(docker compose
+  -f docker-compose.yaml
+  -f tests/integration/docker-compose.test.yaml
+  -f tests/integration/docker-compose-integration.yaml)
 # App services to bring up (graphify-service watch + neo4j intentionally excluded).
 SVCS=(nats graphify-api graphify-cloner graphify-worker graphify-memory-worker graphify-mcp)
 KEEP="${KEEP_STACK:-0}"
