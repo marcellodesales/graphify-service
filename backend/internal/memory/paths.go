@@ -91,6 +91,26 @@ func (l Layout) SSHKnownHostsPath(id, rid string) string {
 	return filepath.Join(l.SSHDir(id), rid+".known_hosts")
 }
 
+// KeyDir holds a memory's provisioned, first-class SSH keys — keyed by KEY id
+// (not resource id) so one key can be referenced by many git resources and
+// rotated independently. It lives under the gitignored .ssh/ tree (never
+// committed, never in GraphRef, never extracted) in its own keys/ subdirectory
+// so a key id can never collide with a legacy per-resource key at .ssh/<rid>.
+func (l Layout) KeyDir(id string) string { return filepath.Join(l.SSHDir(id), "keys") }
+
+// KeyPath is the stored private key material for a provisioned key. keyID MUST
+// be a validated key ID (hex) — never caller free text — since it builds this
+// path. The material here is NEVER committed and NEVER persisted in memory.json.
+func (l Layout) KeyPath(id, keyID string) string {
+	return filepath.Join(l.KeyDir(id), keyID)
+}
+
+// KeyKnownHostsPath is the optional stored known_hosts for a provisioned key.
+// Host keys are public (not a secret).
+func (l Layout) KeyKnownHostsPath(id, keyID string) string {
+	return filepath.Join(l.KeyDir(id), keyID+".known_hosts")
+}
+
 // GraphOutDir is where the merged unified graph is written (committed). It uses
 // the conventional graphify-out name so artifacts.Inventory/Zip and
 // graphify.Enrich, which read <dir>/graphify-out, operate on the memory dir

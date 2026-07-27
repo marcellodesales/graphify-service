@@ -40,3 +40,14 @@ func NewResourceID() (string, error) { return NewID() }
 
 // ValidResourceID reports whether rid is a well-formed resource ID.
 func ValidResourceID(rid string) bool { return resourcePattern.MatchString(rid) }
+
+// keyPattern matches a provisioned-key ID: 32 lowercase hex chars.
+var keyPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// NewKeyID returns a fresh random 32-hex provisioned-key ID.
+func NewKeyID() (string, error) { return NewID() }
+
+// ValidKeyID reports whether keyID is a well-formed provisioned-key ID. Every
+// filesystem lookup keyed by a key ID (e.g. .ssh/keys/<keyID>) MUST be guarded
+// by this check to prevent path traversal.
+func ValidKeyID(keyID string) bool { return keyPattern.MatchString(keyID) }

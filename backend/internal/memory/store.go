@@ -159,6 +159,94 @@ func (s *Store) UpdateResource(id, rid string, mutate func(*Resource) error) (Me
 	})
 }
 
+// ErrKeyInUse is returned when a key delete is refused because a resource still
+// references it.
+var ErrKeyInUse = errors.New("memory: key is referenced by a resource")
+
+// AddKey appends a provisioned key's metadata to the memory (assigning
+// CreatedAt/UpdatedAt) under the per-id lock. The key MATERIAL must already have
+// been written to disk (WriteMemoryKey) — only non-secret metadata is stored
+// here. Returns the updated memory and the stored key.
+func (s *Store) AddKey(id string, k Key) (Memory, Key, error) {
+	now := time.Now().UTC()
+	k.CreatedAt = now
+	k.UpdatedAt = now
+	if k.Type == "" {
+		k.Type = "ssh"
+	}
+	m, err := s.Update(id, func(md *Memory) error {
+		for _, existing := range md.Keys {
+			if existing.ID == k.ID {
+				return fmt.Errorf("memory: key %q already exists", k.ID)
+			}
+		}
+		md.Keys = append(md.Keys, k)
+		return nil
+	})
+	if err != nil {
+		return Memory{}, Key{}, err
+	}
+	return m, k, nil
+}
+
+// UpdateKey applies mutate to the key with keyID under the per-id lock, bumping
+// its UpdatedAt. Used for rotation (new fingerprint + RotatedAt).
+func (s *Store) UpdateKey(id, keyID string, mutate func(*Key) error) (Memory, error) {
+	return s.Update(id, func(md *Memory) error {
+		for i := range md.Keys {
+			if md.Keys[i].ID == keyID {
+				if err := mutate(&md.Keys[i]); err != nil {
+					return err
+				}
+				md.Keys[i].UpdatedAt = time.Now().UTC()
+				return nil
+			}
+		}
+		return fmt.Errorf("memory: key %q not found", keyID)
+	})
+}
+
+// DeleteKey removes the key with keyID from the memory. It refuses (ErrKeyInUse)
+// while any git resource still references the key, so a referenced key can never
+// be pulled out from under a pending or future ingest.
+func (s *Store) DeleteKey(id, keyID string) (Memory, error) {
+	return s.Update(id, func(md *Memory) error {
+		found := false
+		for _, k := range md.Keys {
+			if k.ID == keyID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("memory: key %q not found", keyID)
+		}
+		for _, r := range md.Resources {
+			if r.Source.KeyID == keyID {
+				return ErrKeyInUse
+			}
+		}
+		kept := md.Keys[:0]
+		for _, k := range md.Keys {
+			if k.ID != keyID {
+				kept = append(kept, k)
+			}
+		}
+		md.Keys = kept
+		return nil
+	})
+}
+
+// FindKey returns the key with keyID from a memory snapshot, or false.
+func FindKey(m Memory, keyID string) (Key, bool) {
+	for _, k := range m.Keys {
+		if k.ID == keyID {
+			return k, true
+		}
+	}
+	return Key{}, false
+}
+
 // ListFilter narrows and pages a List call.
 type ListFilter struct {
 	Status Status

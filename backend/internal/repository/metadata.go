@@ -34,6 +34,7 @@ type Source struct {
 	Private           bool   `json:"private"`
 	SSHKeyRef         string `json:"sshKeyRef,omitempty"`    // name of an ops-provisioned key on the SSH volume
 	SSHKeyStored      bool   `json:"sshKeyStored,omitempty"` // a caller-supplied deploy key is stored on our volume (the key material itself is NEVER persisted here — see the type doc)
+	KeyID             string `json:"keyId,omitempty"`        // id of a memory-scoped provisioned key (see memory.Key); resolved to .ssh/keys/<keyId> by the worker
 	DefaultBranch     string `json:"defaultBranch,omitempty"`     // resolved at clone time
 	HasCommittedGraph bool   `json:"hasCommittedGraph,omitempty"` // repo already contains graphify-out/
 	GraphOutPath      string `json:"graphOutPath,omitempty"`      // relative, e.g. graphify-out
@@ -72,3 +73,26 @@ type Failure struct {
 	Message string    `json:"message"`
 	At      time.Time `json:"at"`
 }
+
+// Operation records the most recent unit of work performed against a resource or
+// memory — a generalized, self-describing "what happened last": which operation
+// ran, when it started/finished, and whether it succeeded. It exists so callers
+// can poll work status without inferring it from a bare Status/Stage snapshot.
+//
+// Error carries the same non-secret failure summary used elsewhere; it is set
+// only when Status is OperationFailed. No secrets are ever recorded here.
+type Operation struct {
+	Name       string     `json:"name"`   // "clone" | "extract" | "ingest" | "merge"
+	Status     string     `json:"status"` // OperationRunning | OperationSucceeded | OperationFailed
+	Detail     string     `json:"detail,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	Error      *Failure   `json:"error,omitempty"`
+}
+
+// Operation status values.
+const (
+	OperationRunning   = "running"
+	OperationSucceeded = "succeeded"
+	OperationFailed    = "failed"
+)

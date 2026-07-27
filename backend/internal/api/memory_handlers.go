@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -50,25 +49,14 @@ func (s *Server) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Scaffold + git init + first commit. Detached from the request context so a
-	// client disconnect can't leave a half-initialized repo.
-	ctx := context.Background()
-	dir := s.memStore.Layout().MemoryDir(id)
+	// Write the human-readable scaffold (pure filesystem, no VCS). The API image
+	// is deliberately git-free (spec §3.2): all git work — init, commit, and the
+	// GraphRef HEAD SHA — is owned by the memory worker, which runs InitRepo +
+	// Commit idempotently on the first resource ingest and every merge. A memory
+	// with no resources therefore has no GraphRef yet, which is correct: there is
+	// no graph to point at until something is ingested.
 	if err := memory.WriteScaffold(s.memStore.Layout(), saved); err != nil {
 		s.logger.Error("memory scaffold", "id", id, "error", err)
-	}
-	if err := memory.InitRepo(ctx, dir, s.cfg.MemoryTimeout); err != nil {
-		s.logger.Error("memory git init", "id", id, "error", err)
-	}
-	if ref, err := memory.Commit(ctx, dir, "memory: create "+id, s.cfg.MemoryTimeout); err != nil {
-		s.logger.Error("memory initial commit", "id", id, "error", err)
-	} else {
-		if updated, uerr := s.memStore.Update(id, func(m *memory.Memory) error {
-			m.GraphRef = ref
-			return nil
-		}); uerr == nil {
-			saved = updated
-		}
 	}
 
 	writeJSON(w, r, http.StatusCreated, memViewFor(saved))
@@ -170,8 +158,11 @@ func (s *Server) addGitResource(w http.ResponseWriter, r *http.Request, id strin
 	}
 	sshKeyRef := strings.TrimSpace(req.SSHKeyRef)
 	sshKey := strings.TrimSpace(req.SSHKey)
-	if sshKeyRef != "" && sshKey != "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "provide either sshKeyRef (a provisioned key name) or sshKey (the key material), not both")
+	keyID := strings.TrimSpace(req.KeyID)
+	// keyId, sshKeyRef, and sshKey are three mutually exclusive ways to unlock a
+	// private repo; at most one may be supplied.
+	if n := boolCount(sshKeyRef != "", sshKey != "", keyID != ""); n > 1 {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "provide only one of keyId (a provisioned key), sshKeyRef (an ops key name), or sshKey (key material)")
 		return
 	}
 	if sshKeyRef != "" && !validKeyRef(sshKeyRef) {
@@ -181,6 +172,23 @@ func (s *Server) addGitResource(w http.ResponseWriter, r *http.Request, id strin
 	if sshKey != "" && !memory.LooksLikePrivateKey([]byte(sshKey)) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "sshKey must be a PEM private key (not a public key)")
 		return
+	}
+	if keyID != "" {
+		if !memory.ValidKeyID(keyID) {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "keyId is not a valid key id")
+			return
+		}
+		// The key must already be provisioned on this memory (and its material
+		// present on disk) so the worker can resolve it at ingest time.
+		m, err := s.memStore.Get(id)
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "failed to read memory")
+			return
+		}
+		if _, ok := memory.FindKey(m, keyID); !ok {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "keyId does not reference a provisioned key on this memory")
+			return
+		}
 	}
 
 	rid, err := memory.NewResourceID()
@@ -214,9 +222,10 @@ func (s *Server) addGitResource(w http.ResponseWriter, r *http.Request, id strin
 			OwnerPath:     repo.Owner,
 			Repository:    repo.Name,
 			Transport:     string(repo.Transport),
-			Private:       sshKeyRef != "" || sshKeyStored,
+			Private:       sshKeyRef != "" || sshKeyStored || keyID != "",
 			SSHKeyRef:     sshKeyRef,
 			SSHKeyStored:  sshKeyStored,
+			KeyID:         keyID,
 		},
 	}
 	s.appendResource(w, r, id, res)
@@ -290,8 +299,9 @@ func (s *Server) appendResource(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
-	ref := s.commitMemory(id, "memory: add "+string(stored.Kind)+" resource "+stored.ID)
-
+	// No git here: the API image is git-free (spec §3.2). The worker commits the
+	// memory repo (and sets GraphRef) when it ingests this resource. The durable
+	// manifest is already persisted by AddResource above.
 	if s.bus != nil {
 		if err := s.bus.PublishMemory(events.SubjectMemoryResourceRequested,
 			"memory-resource-request:"+id+":"+stored.ID,
@@ -306,7 +316,6 @@ func (s *Server) appendResource(w http.ResponseWriter, r *http.Request, id strin
 		ResourceID: stored.ID,
 		Kind:       string(stored.Kind),
 		Status:     string(stored.Status),
-		Ref:        ref,
 	})
 }
 
@@ -411,14 +420,16 @@ func (s *Server) handleSetResourceSSHKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ref := s.commitMemory(id, "memory: set ssh key for resource "+rid)
-
+	// No git here: the API image is git-free (spec §3.2). The worker commits the
+	// memory repo when it re-ingests this resource with the new key.
 	if s.bus != nil {
-		// The fresh commit ref makes the message id unique per re-key so
-		// JetStream delivers it instead of deduplicating against the original.
+		// A random nonce makes the message id unique per re-key so JetStream
+		// delivers it instead of deduplicating against the original request.
+		// (Previously the fresh commit sha served this role; the API no longer
+		// commits, so we mint a nonce independent of git.)
 		msgID := "memory-resource-request:" + id + ":" + rid
-		if ref != "" {
-			msgID += ":" + ref
+		if nonce, nerr := memory.NewID(); nerr == nil {
+			msgID += ":" + nonce
 		}
 		if err := s.bus.PublishMemory(events.SubjectMemoryResourceRequested, msgID,
 			events.MemoryEventData{MemoryID: id, ResourceID: rid}); err != nil {
@@ -430,7 +441,6 @@ func (s *Server) handleSetResourceSSHKey(w http.ResponseWriter, r *http.Request)
 		MemoryID:   id,
 		ResourceID: rid,
 		Status:     string(repository.StatusQueued),
-		Ref:        ref,
 	})
 }
 
@@ -624,28 +634,6 @@ func (s *Server) loadMemory(w http.ResponseWriter, r *http.Request) (memory.Memo
 	return m, true
 }
 
-// commitMemory refreshes the scaffold, commits the memory repo, and persists the
-// new HEAD SHA as GraphRef. Returns the new ref (empty on failure — logged, not
-// fatal, since the manifest is already durably stored).
-func (s *Server) commitMemory(id, message string) string {
-	ctx := context.Background()
-	if m, err := s.memStore.Get(id); err == nil {
-		_ = memory.WriteScaffold(s.memStore.Layout(), m)
-	}
-	ref, err := memory.Commit(ctx, s.memStore.Layout().MemoryDir(id), message, s.cfg.MemoryTimeout)
-	if err != nil {
-		s.logger.Error("commit memory", "id", id, "error", err)
-		return ""
-	}
-	if _, err := s.memStore.Update(id, func(m *memory.Memory) error {
-		m.GraphRef = ref
-		return nil
-	}); err != nil {
-		s.logger.Error("persist memory ref", "id", id, "error", err)
-	}
-	return ref
-}
-
 func memPath(id string) string { return "/api/v1/memories/" + id }
 
 func memViewFor(m memory.Memory) memoryView {
@@ -654,6 +642,8 @@ func memViewFor(m memory.Memory) memoryView {
 		Links: memoryLinks{
 			Self:        memPath(m.ID),
 			Resources:   memPath(m.ID) + "/resources",
+			Keys:        memPath(m.ID) + "/keys",
+			Status:      memPath(m.ID) + "/status",
 			Graph:       memPath(m.ID) + "/graph",
 			Query:       memPath(m.ID) + "/query",
 			Artifacts:   memPath(m.ID) + "/artifacts",

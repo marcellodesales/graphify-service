@@ -143,9 +143,20 @@ func (w *worker) handleResource(data events.MemoryEventData) error {
 		return w.maybeRequestMerge(id)
 	}
 
+	opName := "ingest"
+	if res.Kind == memory.KindGit {
+		opName = "clone+extract"
+	} else if res.Kind == memory.KindFile {
+		opName = "extract"
+	}
 	if _, err := w.memStore.UpdateResource(id, rid, func(r *memory.Resource) error {
 		r.Status = repository.StatusGraphifying
 		r.Stage = "ingesting"
+		r.LastOperation = &repository.Operation{
+			Name:      opName,
+			Status:    repository.OperationRunning,
+			StartedAt: time.Now().UTC(),
+		}
 		return nil
 	}); err != nil {
 		w.logger.Error("memory: begin resource", "memory", id, "resource", rid, "error", err)
@@ -159,10 +170,12 @@ func (w *worker) handleResource(data events.MemoryEventData) error {
 		CodeOnly:     w.cfg.CodeOnly,
 	}
 	// Resolve the SSH deploy key for a private git resource. The clone "task"
-	// carries the {repo, ref, key} combo: a caller-supplied key stored on our
-	// volume (keyed by resource id) takes precedence over an ops-provisioned key
-	// referenced by name on the read-only SSH secrets volume. On-disk presence is
-	// the source of truth — the key travels with the resource.
+	// carries the {repo, ref, key} combo. Precedence, highest first:
+	//   1. a caller-supplied key stored per-resource (legacy inline sshKey), then
+	//   2. a memory-scoped provisioned key referenced by id (Source.KeyID → the
+	//      .ssh/keys/<keyId> material, reusable across resources and rotatable), then
+	//   3. an ops-provisioned key referenced by name on the read-only SSH volume.
+	// On-disk presence is the source of truth — the key travels with the resource.
 	if res.Kind == memory.KindGit {
 		l := w.memStore.Layout()
 		switch {
@@ -170,6 +183,13 @@ func (w *worker) handleResource(data events.MemoryEventData) error {
 			opts.SSHKeyPath = l.SSHKeyPath(id, rid)
 			if memory.HasResourceKnownHosts(l, id, rid) {
 				opts.KnownHosts = l.SSHKnownHostsPath(id, rid)
+			} else {
+				opts.KnownHosts = w.cfg.KnownHosts
+			}
+		case res.Source.KeyID != "" && memory.HasMemoryKey(l, id, res.Source.KeyID):
+			opts.SSHKeyPath = l.KeyPath(id, res.Source.KeyID)
+			if memory.HasMemoryKeyKnownHosts(l, id, res.Source.KeyID) {
+				opts.KnownHosts = l.KeyKnownHostsPath(id, res.Source.KeyID)
 			} else {
 				opts.KnownHosts = w.cfg.KnownHosts
 			}
@@ -193,7 +213,22 @@ func (w *worker) handleResource(data events.MemoryEventData) error {
 	}
 
 	if _, err := w.memStore.UpdateResource(id, rid, func(r *memory.Resource) error {
+		started := time.Now().UTC()
+		if r.LastOperation != nil {
+			started = r.LastOperation.StartedAt
+		}
+		opName := "ingest"
+		if r.LastOperation != nil {
+			opName = r.LastOperation.Name
+		}
 		*r = updated
+		finished := time.Now().UTC()
+		r.LastOperation = &repository.Operation{
+			Name:       opName,
+			Status:     repository.OperationSucceeded,
+			StartedAt:  started,
+			FinishedAt: &finished,
+		}
 		return nil
 	}); err != nil {
 		return w.failResource(id, rid, fmt.Sprintf("persist resource: %v", err))
@@ -267,6 +302,11 @@ func (w *worker) handleMerge(data events.MemoryEventData) error {
 		md.Stage = "merging"
 		now := time.Now().UTC()
 		md.Timestamps.MergeStartedAt = &now
+		md.LastOperation = &repository.Operation{
+			Name:      "merge",
+			Status:    repository.OperationRunning,
+			StartedAt: now,
+		}
 		return nil
 	}); err != nil {
 		w.logger.Error("memory: begin merge", "memory", id, "error", err)
@@ -285,6 +325,16 @@ func (w *worker) handleMerge(data events.MemoryEventData) error {
 		md.Failure = nil
 		now := time.Now().UTC()
 		md.Timestamps.MergeFinishedAt = &now
+		started := now
+		if md.LastOperation != nil {
+			started = md.LastOperation.StartedAt
+		}
+		md.LastOperation = &repository.Operation{
+			Name:       "merge",
+			Status:     repository.OperationSucceeded,
+			StartedAt:  started,
+			FinishedAt: &now,
+		}
 		return nil
 	}); err != nil {
 		return w.failMerge(id, fmt.Sprintf("persist ready: %v", err))
@@ -306,10 +356,24 @@ func (w *worker) handleMerge(data events.MemoryEventData) error {
 func (w *worker) failResource(id, rid, msg string) error {
 	w.logger.Error("memory resource failed", "memory", id, "resource", rid, "msg", msg)
 	now := time.Now().UTC()
+	fail := &repository.Failure{Stage: "ingest", Code: "ingest_failed", Message: msg, At: now}
 	_, _ = w.memStore.UpdateResource(id, rid, func(r *memory.Resource) error {
 		r.Status = repository.StatusFailed
 		r.Stage = "failed"
-		r.Failure = &repository.Failure{Stage: "ingest", Code: "ingest_failed", Message: msg, At: now}
+		r.Failure = fail
+		started := now
+		opName := "ingest"
+		if r.LastOperation != nil {
+			started = r.LastOperation.StartedAt
+			opName = r.LastOperation.Name
+		}
+		r.LastOperation = &repository.Operation{
+			Name:       opName,
+			Status:     repository.OperationFailed,
+			StartedAt:  started,
+			FinishedAt: &now,
+			Error:      fail,
+		}
 		return nil
 	})
 	_, _ = w.memStore.Update(id, func(md *memory.Memory) error {
@@ -327,10 +391,23 @@ func (w *worker) failResource(id, rid, msg string) error {
 // failMerge marks the memory failed and publishes merge.failed. Terminal — acks.
 func (w *worker) failMerge(id, msg string) error {
 	w.logger.Error("memory merge failed", "memory", id, "msg", msg)
+	now := time.Now().UTC()
+	fail := &repository.Failure{Stage: "merge", Code: "merge_failed", Message: msg, At: now}
 	_, _ = w.memStore.Update(id, func(md *memory.Memory) error {
 		md.Status = memory.StatusFailed
 		md.Stage = "merge"
-		md.Failure = &repository.Failure{Stage: "merge", Code: "merge_failed", Message: msg, At: time.Now().UTC()}
+		md.Failure = fail
+		started := now
+		if md.LastOperation != nil {
+			started = md.LastOperation.StartedAt
+		}
+		md.LastOperation = &repository.Operation{
+			Name:       "merge",
+			Status:     repository.OperationFailed,
+			StartedAt:  started,
+			FinishedAt: &now,
+			Error:      fail,
+		}
 		return nil
 	})
 	w.commitMemory(id, "memory: merge failed")

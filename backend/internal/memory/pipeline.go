@@ -209,7 +209,16 @@ func Assemble(ctx context.Context, timeout time.Duration, l Layout, m Memory) ([
 
 	inputs := make([]string, 0, len(ready))
 	for _, r := range ready {
-		labelDir := filepath.Join(stageRoot, resourceLabel(r))
+		// graphify merge-graphs derives each input's repo tag from the graph's
+		// GRANDPARENT dir (it expects a <repo>/graphify-out/graph.json layout —
+		// see distinct_repo_tags / cli.py merge-graphs, which reads
+		// gp.parent.parent.name). Staging as <label>/graph.json puts the label at
+		// the parent level, so every input's grandparent is the shared stageRoot
+		// temp dir: the tags collide and get replaced by synthetic names that drop
+		// the repo slug entirely, so no resource is identifiable in the merged
+		// graph. Insert a graphify-out/ level so the label dir becomes the
+		// grandparent and merge-graphs tags each node with resourceLabel(r).
+		labelDir := filepath.Join(stageRoot, resourceLabel(r), "graphify-out")
 		if err := os.MkdirAll(labelDir, 0o750); err != nil {
 			return nil, fmt.Errorf("memory: stage dir: %w", err)
 		}

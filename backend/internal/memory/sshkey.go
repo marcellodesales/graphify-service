@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -62,6 +64,74 @@ func WriteResourceSSHKey(l Layout, id, rid string, keyPEM, knownHosts []byte) er
 		if err := writeFile0600(l.SSHKnownHostsPath(id, rid), kh); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// normalizeKeyPEM canonicalizes key bytes the way both storage and fingerprint
+// need: strip trailing CR/LF/space and append exactly one trailing newline (ssh
+// requires it). Applying the same normalization to the stored file and to the
+// fingerprint input makes the fingerprint stable across CRLF/whitespace noise.
+func normalizeKeyPEM(keyPEM []byte) []byte {
+	return []byte(strings.TrimRight(string(keyPEM), "\r\n ") + "\n")
+}
+
+// KeyFingerprint returns a SHA-256 hex digest of the normalized key bytes. It is
+// a one-way digest used to identify a key and detect rotation — NOT the secret,
+// and not reversible to the key. Safe to persist and return via the API.
+func KeyFingerprint(keyPEM []byte) string {
+	sum := sha256.Sum256(normalizeKeyPEM(keyPEM))
+	return hex.EncodeToString(sum[:])
+}
+
+// WriteMemoryKey stores a provisioned, first-class SSH key for a memory under the
+// gitignored .ssh/keys/ tree, keyed by KEY id (mode 0600). Like
+// WriteResourceSSHKey, the key material is NEVER written to memory.json; only
+// non-secret facts (a fingerprint, timestamps, a bool) are persisted by the
+// store. Optional knownHosts (public host keys — not a secret) is stored
+// alongside for host-key verification.
+//
+// Both id and keyID MUST be validated (ValidID / ValidKeyID) by the caller: they
+// are used to build the on-disk path.
+func WriteMemoryKey(l Layout, id, keyID string, keyPEM, knownHosts []byte) error {
+	if !LooksLikePrivateKey(keyPEM) {
+		return fmt.Errorf("memory: sshKey does not look like a PEM private key")
+	}
+	if err := os.MkdirAll(l.KeyDir(id), 0o700); err != nil {
+		return fmt.Errorf("memory: key dir: %w", err)
+	}
+	if err := writeFile0600(l.KeyPath(id, keyID), normalizeKeyPEM(keyPEM)); err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(knownHosts))) > 0 {
+		kh := []byte(strings.TrimRight(string(knownHosts), "\r\n ") + "\n")
+		if err := writeFile0600(l.KeyKnownHostsPath(id, keyID), kh); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// HasMemoryKey reports whether a provisioned key's material exists on disk.
+func HasMemoryKey(l Layout, id, keyID string) bool {
+	fi, err := os.Stat(l.KeyPath(id, keyID))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// HasMemoryKeyKnownHosts reports whether a provisioned key has stored known_hosts.
+func HasMemoryKeyKnownHosts(l Layout, id, keyID string) bool {
+	fi, err := os.Stat(l.KeyKnownHostsPath(id, keyID))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// RemoveMemoryKey deletes a provisioned key's material (and any known_hosts) from
+// disk. Missing files are not an error (idempotent).
+func RemoveMemoryKey(l Layout, id, keyID string) error {
+	if err := os.Remove(l.KeyPath(id, keyID)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("memory: remove key: %w", err)
+	}
+	if err := os.Remove(l.KeyKnownHostsPath(id, keyID)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("memory: remove key known_hosts: %w", err)
 	}
 	return nil
 }

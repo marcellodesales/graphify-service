@@ -28,10 +28,30 @@ type Memory struct {
 	Status        Status              `json:"status"`
 	Stage         string              `json:"stage,omitempty"`
 	Resources     []Resource          `json:"resources"`
+	Keys          []Key                 `json:"keys,omitempty"` // provisioned SSH keys (metadata only; material lives under gitignored .ssh/keys/)
 	GraphRef      string              `json:"graphRef,omitempty"` // git HEAD SHA of the memory repo
 	Artifacts     []repository.Artifact `json:"artifacts"`        // the merged graph outputs (graphify-out/)
 	Timestamps    Timestamps          `json:"timestamps"`
 	Failure       *repository.Failure `json:"failure"`
+	LastOperation *repository.Operation `json:"lastOperation,omitempty"` // the most recent memory-level operation (e.g. merge)
+}
+
+// Key is a provisioned SSH key belonging to a memory: added once, referenced by
+// id from any number of git resources, and rotatable independently. The private
+// key MATERIAL is never stored here — it lives on the gitignored .ssh/keys/
+// volume (see Layout.KeyPath) and is never committed, never returned by the API,
+// and never logged. Only these non-secret facts are persisted.
+type Key struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"` // caller-supplied label
+	Type string `json:"type"`           // "ssh"
+	// Fingerprint is a SHA-256 hex digest of the normalized key bytes — a
+	// one-way digest used to detect rotation / identify the key, NOT the secret.
+	Fingerprint      string     `json:"fingerprint,omitempty"`
+	KnownHostsStored bool       `json:"knownHostsStored,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+	RotatedAt        *time.Time `json:"rotatedAt,omitempty"`
 }
 
 // Kind is the type of a resource within a memory.
@@ -72,7 +92,8 @@ type Resource struct {
 	RelPath      string `json:"relPath,omitempty"`
 	GraphOutPath string `json:"graphOutPath,omitempty"`
 
-	Failure *repository.Failure `json:"failure,omitempty"`
+	Failure       *repository.Failure   `json:"failure,omitempty"`
+	LastOperation *repository.Operation `json:"lastOperation,omitempty"` // the most recent operation run for this resource
 
 	AddedAt   time.Time `json:"addedAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
