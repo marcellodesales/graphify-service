@@ -1,0 +1,35 @@
+meta {
+  name: Work status reports the last operation
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/status
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.memoryId: eq {{memoryId}}
+  res.body.status: eq ready
+}
+
+tests {
+  test("memory-level lastOperation succeeded", function () {
+    const op = res.getBody().lastOperation;
+    expect(op, "lastOperation").to.be.an("object");
+    expect(op.status, "lastOperation.status").to.equal("succeeded");
+    expect(op.name, "lastOperation.name").to.be.a("string").and.to.have.length.greaterThan(0);
+  });
+  test("every resource reports a succeeded last operation", function () {
+    const rs = res.getBody().resources;
+    expect(rs).to.be.an("array").and.to.have.length.greaterThan(0);
+    rs.forEach(function (r) {
+      expect(r.status, "resource " + r.id + " status").to.equal("ready");
+      expect(r.lastOperation, "resource " + r.id + " lastOperation").to.be.an("object");
+      expect(r.lastOperation.status, "resource " + r.id + " op status").to.equal("succeeded");
+    });
+  });
+}

@@ -36,6 +36,10 @@ services:
     # ci/run.sh and re-run — no rebuild. Read-only so tests can't mutate sources.
     volumes:
       - ./:/suite:ro
+      # Private deploy key, injected at run time by run-integration.sh (copied
+      # from $SSH_KEY_FILE). Read-only, gitignored, never baked into the image.
+      # When absent this is an empty dir and private-repo suites fail loudly.
+      - ./.secrets:/run/ssh:ro
     working_dir: /suite
     # The "command is a set of shell commands" — kept here (referencing the
     # mounted script) so it's visible with the compose definition.
@@ -50,6 +54,10 @@ services:
       APP_REPO: ${APP_REPO:-https://github.com/marcellodesales/azure-chatgpt-spa-service}
       DEPLOY_REPO: ${DEPLOY_REPO:-https://github.com/marcellodesales/azure-chatgpt-spa-service-deploy}
       MEMORY_QUESTION: ${MEMORY_QUESTION:-main}
+      # Private-repo access for the correlation suite. PRIVATE=1 clones over SSH
+      # with the mounted deploy key; if the key is missing the suite fails.
+      PRIVATE: ${PRIVATE:-1}
+      SSH_KEY: /run/ssh/ssh_key
     depends_on:
       nats:
         condition: service_healthy

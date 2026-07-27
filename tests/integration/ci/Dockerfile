@@ -6,8 +6,10 @@
 # integration-tests service, so editing a .bru spec or ci/run.sh needs no rebuild.
 FROM node:20-bookworm-slim
 
+# openssh-client provides ssh-keyscan, used to fetch a git host's known_hosts so
+# private (SSH) clones satisfy the worker's StrictHostKeyChecking=yes.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash curl jq ca-certificates \
+ && apt-get install -y --no-install-recommends bash curl jq ca-certificates openssh-client \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g @usebruno/cli@3.5.3
 
