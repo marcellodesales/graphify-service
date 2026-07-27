@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcellodesales/graphify-service/backend/internal/config"
+	"github.com/marcellodesales/graphify-service/backend/internal/memory"
 	"github.com/marcellodesales/graphify-service/backend/internal/repository"
 )
 
@@ -22,8 +23,12 @@ func testServer(t *testing.T, cfg config.Config) *Server {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
+	memStore, err := memory.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("memory store: %v", err)
+	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return NewServer(cfg, store, logger, nil)
+	return NewServer(cfg, store, memStore, logger, nil)
 }
 
 func doJSON(t *testing.T, h http.Handler, method, path, body string, hdr map[string]string) *httptest.ResponseRecorder {

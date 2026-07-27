@@ -1,0 +1,34 @@
+meta {
+  name: Merged artifact inventory
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/artifacts
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq ready
+}
+
+tests {
+  test("inventory includes the canonical merged graph.json", function () {
+    const names = res.getBody().artifacts.map(function (a) { return a.name; });
+    expect(names).to.include("graph.json");
+  });
+  test("no internal .graphify_* or .git files are exposed", function () {
+    res.getBody().artifacts.forEach(function (a) {
+      expect(a.name.indexOf("."), a.name).to.not.equal(0);
+    });
+  });
+  test("every artifact has size + sha256", function () {
+    res.getBody().artifacts.forEach(function (a) {
+      expect(a.size).to.be.a("number");
+      expect(a.sha256).to.be.a("string").and.to.have.length(64);
+    });
+  });
+}

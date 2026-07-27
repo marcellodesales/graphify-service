@@ -25,3 +25,14 @@ services:
     environment:
       GRAPHIFY_CODE_ONLY: "true" # local AST, no LLM key
       GRAPHIFY_LOG_LEVEL: debug
+
+  # Memory worker (multi-source unified graph). Built FROM the fresh graphify
+  # base so `graphify extract` + `merge-graphs` exist. Exercised by run-memory.sh
+  # (T2): create a memory → add git source(s) → merge → query via graphify-mcp.
+  graphify-memory-worker:
+    build:
+      args:
+        GRAPHIFY_IMAGE: marcellodesales/graphify:latest
+    environment:
+      GRAPHIFY_CODE_ONLY: "true" # local AST, no LLM key
+      GRAPHIFY_LOG_LEVEL: debug

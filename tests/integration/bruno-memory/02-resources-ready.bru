@@ -1,0 +1,28 @@
+meta {
+  name: Every resource is ready
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/resources
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("at least one resource is attached", function () {
+    const rs = res.getBody().resources;
+    expect(rs).to.be.an("array").and.to.have.length.greaterThan(0);
+  });
+  test("no resource failed to ingest", function () {
+    const rs = res.getBody().resources;
+    rs.forEach(function (r) {
+      expect(r.status, "resource " + r.id + " status").to.equal("ready");
+    });
+  });
+}

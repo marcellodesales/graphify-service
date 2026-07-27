@@ -1,0 +1,38 @@
+meta {
+  name: SSH-key PUT rejects a public key (no secret leak)
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/resources/{{resourceId}}/ssh-key
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "sshKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImNotAPrivateKey test@example.com"
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.error.code: eq invalid_request
+}
+
+tests {
+  test("error explains a private key is required", function () {
+    expect(res.getBody().error.message.toLowerCase()).to.include("private key");
+  });
+}
+
+docs {
+  A public key must never be accepted as a deploy key. Rejection happens at
+  validation (LooksLikePrivateKey) before anything is written, so this is
+  non-mutating: the resource stays ready and no key file is created.
+}

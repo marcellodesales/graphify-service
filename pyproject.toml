@@ -40,6 +40,7 @@ dependencies = [
     "tree-sitter-fortran>=0.6,<0.8",
     "tree-sitter-bash>=0.23,<0.27",
     "tree-sitter-json>=0.23,<0.26",
+    "pyyaml>=6",
 ]
 
 [project.urls]
@@ -111,7 +112,7 @@ dev = [
 package = true
 
 [tool.setuptools]
-packages = ["graphify", "graphify.extractors", "graphify.exporters"]
+packages = ["graphify", "graphify.extractors", "graphify.exporters", "graphify.decoders"]
 include-package-data = false
 
 [tool.setuptools.package-data]

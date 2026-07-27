@@ -24,6 +24,27 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repositories/{id}/download", s.protect(s.handleDownload))
 	mux.HandleFunc("POST /api/v1/repositories/{id}/query", s.protect(s.handleQuery))
 
+	// Protected memory API (multi-source unified graph).
+	mux.HandleFunc("POST /api/v1/memories", s.protect(s.handleCreateMemory))
+	mux.HandleFunc("GET /api/v1/memories", s.protect(s.handleListMemories))
+	mux.HandleFunc("GET /api/v1/memories/{id}", s.protect(s.handleGetMemory))
+	mux.HandleFunc("POST /api/v1/memories/{id}/resources", s.protect(s.handleAddResource))
+	mux.HandleFunc("GET /api/v1/memories/{id}/resources", s.protect(s.handleListResources))
+	mux.HandleFunc("GET /api/v1/memories/{id}/resources/{rid}", s.protect(s.handleGetResource))
+	mux.HandleFunc("GET /api/v1/memories/{id}/resources/{rid}/status", s.protect(s.handleResourceStatus))
+	mux.HandleFunc("PUT /api/v1/memories/{id}/resources/{rid}/ssh-key", s.protect(s.handleSetResourceSSHKey))
+	mux.HandleFunc("POST /api/v1/memories/{id}/keys", s.protect(s.handleAddKey))
+	mux.HandleFunc("GET /api/v1/memories/{id}/keys", s.protect(s.handleListKeys))
+	mux.HandleFunc("GET /api/v1/memories/{id}/keys/{keyId}", s.protect(s.handleGetKey))
+	mux.HandleFunc("PUT /api/v1/memories/{id}/keys/{keyId}", s.protect(s.handleRotateKey))
+	mux.HandleFunc("DELETE /api/v1/memories/{id}/keys/{keyId}", s.protect(s.handleDeleteKey))
+	mux.HandleFunc("GET /api/v1/memories/{id}/status", s.protect(s.handleMemoryStatus))
+	mux.HandleFunc("GET /api/v1/memories/{id}/graph", s.protect(s.handleMemoryGraph))
+	mux.HandleFunc("POST /api/v1/memories/{id}/query", s.protect(s.handleMemoryQuery))
+	mux.HandleFunc("GET /api/v1/memories/{id}/artifacts", s.protect(s.handleMemoryArtifacts))
+	mux.HandleFunc("GET /api/v1/memories/{id}/artifacts/{name}", s.protect(s.handleMemoryArtifactFile))
+	mux.HandleFunc("GET /api/v1/memories/{id}/download", s.protect(s.handleMemoryDownload))
+
 	var h http.Handler = mux
 	h = withBodyLimit(s.cfg.MaxRequestBytes, h)
 	h = withLogging(s.logger, h)

@@ -131,12 +131,50 @@ services:
       nats:
         condition: service_healthy
 
+  # ── Memory worker: multi-source unified graph (memory abstraction) ─────────
+  # CI build target for docker-multiarch-cicd-memoryworker.yaml.
+  # Built FROM the graphify image so `graphify extract` + `merge-graphs` + git are
+  # on PATH. Runs two durable consumers: resource.requested (clone/upload +
+  # extract per source) and merge.requested (merge every resource graph into the
+  # memory's unified graphify-out/). Serves the status protocol on :8080.
+  graphify-memory-worker:
+    image: ghcr.io/marcellodesales/graphify-service/memoryworker
+    build:
+      context: ./backend
+      dockerfile: memoryworker/Dockerfile
+      args:
+        GRAPHIFY_IMAGE: ${GRAPHIFY_IMAGE:-marcellodesales/graphify:latest}
+    restart: unless-stopped
+    ports:
+      - "${GRAPHIFY_MEMORY_WORKER_PORT:-8084}:8080" # /status/{id}, /healthz, /readyz
+    environment:
+      GRAPHIFY_REPOS_ROOT: /graphify-service/repos
+      GRAPHIFY_MEMORIES_SUBDIR: ${GRAPHIFY_MEMORIES_SUBDIR:-memories}
+      GRAPHIFY_CODE_ONLY: ${GRAPHIFY_CODE_ONLY:-true} # local AST, no LLM key
+      GRAPHIFY_MEMORY_TIMEOUT: ${GRAPHIFY_MEMORY_TIMEOUT:-60m}
+      GRAPHIFY_SSH_ROOT: /run/secrets/graphify-ssh
+      GRAPHIFY_KNOWN_HOSTS: ${GRAPHIFY_KNOWN_HOSTS:-}
+      GRAPHIFY_LOG_LEVEL: ${GRAPHIFY_LOG_LEVEL:-info}
+      NATS_URL: nats://nats:4222
+    volumes:
+      - ./data/repos:/graphify-service/repos
+      # Read-only SSH deploy keys — a memory git resource may be private.
+      - ./secrets/ssh:/run/secrets/graphify-ssh:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+
   # ── Graphify MCP query server (PRD-004) ────────────────────────────────────
   # Serves graphify's query tools (query_graph, get_node, graph_stats, …) over
-  # Streamable HTTP for the whole shared repos volume. The API's /query endpoint
-  # composes with it, injecting project_path per repo. Stateless + json-response
-  # so a single stateless tools/call works (no session). Boots with a bogus graph
-  # path — real queries pass project_path. Reuses the graphify image (has mcp).
+  # Streamable HTTP for the whole shared repos volume. Both the API's repository
+  # /query AND memory /query endpoints compose with it, injecting project_path
+  # per call: a repo dir resolves <repo>/graphify-out/graph.json, a memory dir
+  # resolves memories/<id>/graphify-out/graph.json (the merged, cross-source
+  # unified graph). One stateless server answers for either — no memory-specific
+  # MCP service needed, because it mounts the same ./data/repos volume the memory
+  # worker writes the unified graph to. Stateless + json-response so a single
+  # stateless tools/call works (no session). Boots with a bogus graph path — real
+  # queries pass project_path. Reuses the graphify image (has mcp).
   graphify-mcp:
     image: marcellodesales/graphify
     build:

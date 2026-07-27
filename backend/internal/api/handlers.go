@@ -16,6 +16,7 @@ import (
 	"github.com/marcellodesales/graphify-service/backend/internal/events"
 	"github.com/marcellodesales/graphify-service/backend/internal/giturl"
 	"github.com/marcellodesales/graphify-service/backend/internal/mcpproxy"
+	"github.com/marcellodesales/graphify-service/backend/internal/memory"
 	"github.com/marcellodesales/graphify-service/backend/internal/repository"
 	"github.com/marcellodesales/graphify-service/backend/internal/statushttp"
 )
@@ -24,26 +25,29 @@ import (
 // nil the API still accepts submissions but does not drive the async pipeline.
 type Publisher interface {
 	Publish(subject, msgID string, data events.RepoEventData) error
+	PublishMemory(subject, msgID string, data events.MemoryEventData) error
 	Connected() bool
 }
 
 // Server holds the HTTP handler dependencies.
 type Server struct {
-	cfg    config.Config
-	store  *repository.Store
-	logger *slog.Logger
-	auth   authenticator
-	bus    Publisher
+	cfg      config.Config
+	store    *repository.Store
+	memStore *memory.Store
+	logger   *slog.Logger
+	auth     authenticator
+	bus      Publisher
 }
 
 // NewServer builds a Server. bus may be nil (pipeline disabled).
-func NewServer(cfg config.Config, store *repository.Store, logger *slog.Logger, bus Publisher) *Server {
+func NewServer(cfg config.Config, store *repository.Store, memStore *memory.Store, logger *slog.Logger, bus Publisher) *Server {
 	return &Server{
-		cfg:    cfg,
-		store:  store,
-		logger: logger,
-		auth:   authenticator{mode: cfg.AuthMode, token: cfg.APIToken},
-		bus:    bus,
+		cfg:      cfg,
+		store:    store,
+		memStore: memStore,
+		logger:   logger,
+		auth:     authenticator{mode: cfg.AuthMode, token: cfg.APIToken},
+		bus:      bus,
 	}
 }
 

@@ -1,0 +1,85 @@
+####
+#### Reproducible, containerized integration suite.
+####
+#### One command, no host-side bru/curl/jq needed:
+####
+####   ./tests/integration/run-integration.sh              # SUITE=all
+####   SUITE=memory ./tests/integration/run-integration.sh # just T2
+####
+#### or directly (note the -f ORDER — base, then test override, then this file):
+####
+####   docker compose \
+####     -f docker-compose.yaml \
+####     -f tests/integration/docker-compose.test.yaml \
+####     -f tests/integration/docker-compose-integration.yaml \
+####     up --build --abort-on-container-exit --exit-code-from integration-tests \
+####     nats graphify-api graphify-cloner graphify-worker \
+####     graphify-memory-worker graphify-mcp integration-tests
+####
+#### This file only ADDS the `integration-tests` runner; the base stack and the
+#### test override (auth off, code-only, debug logs) are layered via the `-f` chain
+#### above. We deliberately do NOT use compose `include:` here: `include` requires
+#### its imported files to be disjoint, and both the base compose and the test
+#### override define `graphify-worker`, so older Docker Compose rejects it with
+#### "services.graphify-worker conflicts with imported resource" (this is exactly
+#### what failed on the CI runner). The classic `-f` override chain merges
+#### same-named services reliably on every Compose version. All relative paths below
+#### resolve against the PROJECT directory (the repo root — the dir of the first
+#### `-f` file), hence the `./tests/integration/...` prefixes.
+####
+#### The `integration-tests` service is the runner: its command is a set of shell
+#### commands delivered via the read-only /suite volume mount (ci/run.sh), so
+#### specs/orchestration change WITHOUT an image rebuild. Its exit code (via
+#### --exit-code-from) is the suite result.
+####
+#### The worker images are built FROM the locally-built `graphify` base (which has
+#### `graphify extract` + `merge-graphs`), so build that first — the host wrapper
+#### run-integration.sh does `compose build graphify` before `up`.
+####
+
+services:
+  integration-tests:
+    build:
+      # Paths resolve against the project dir (repo root), so point at this dir.
+      context: ./tests/integration
+      dockerfile: ci/Dockerfile
+    # The suite lives on the volume, not in the image: edit a .bru spec or
+    # ci/run.sh and re-run — no rebuild. Read-only so tests can't mutate sources.
+    volumes:
+      - ./tests/integration:/suite:ro
+      # Private deploy key, injected at run time by run-integration.sh (copied
+      # from $SSH_KEY_FILE). Read-only, gitignored, never baked into the image.
+      # When absent this is an empty dir and private-repo suites fail loudly.
+      - ./tests/integration/.secrets:/run/ssh:ro
+    working_dir: /suite
+    # The "command is a set of shell commands" — kept here (referencing the
+    # mounted script) so it's visible with the compose definition.
+    command: ["bash", "ci/run.sh"]
+    environment:
+      # Reach services by compose DNS name over the shared network (not host ports).
+      BASE_URL: http://graphify-api:8080
+      CLONER_URL: http://graphify-cloner:8080
+      WORKER_URL: http://graphify-worker:8080
+      SUITE: ${SUITE:-all}
+      SAMPLE_REPO: ${SAMPLE_REPO:-https://github.com/githubtraining/hellogitworld}
+      APP_REPO: ${APP_REPO:-https://github.com/marcellodesales/azure-chatgpt-spa-service}
+      DEPLOY_REPO: ${DEPLOY_REPO:-https://github.com/marcellodesales/azure-chatgpt-spa-service-deploy}
+      MEMORY_QUESTION: ${MEMORY_QUESTION:-main}
+      # Private-repo access for the correlation suite. PRIVATE=1 clones over SSH
+      # with the mounted deploy key; if the key is missing the suite fails.
+      PRIVATE: ${PRIVATE:-1}
+      SSH_KEY: /run/ssh/ssh_key
+    depends_on:
+      nats:
+        condition: service_healthy
+      graphify-api:
+        condition: service_started
+      graphify-cloner:
+        condition: service_started
+      graphify-worker:
+        condition: service_started
+      graphify-memory-worker:
+        condition: service_started
+      graphify-mcp:
+        condition: service_started
+    restart: "no"

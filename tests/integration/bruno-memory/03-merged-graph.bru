@@ -1,0 +1,25 @@
+meta {
+  name: Merged graph has nodes
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}/graph
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("served as JSON", function () {
+    expect(res.getHeader("content-type")).to.match(/application\/json/);
+  });
+  test("unified graph is non-empty", function () {
+    const g = res.getBody();
+    expect(g.nodes, "graph.nodes").to.be.an("array").and.to.have.length.greaterThan(0);
+  });
+}

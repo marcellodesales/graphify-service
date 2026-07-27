@@ -1,0 +1,29 @@
+meta {
+  name: Memory status is ready
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/memories/{{memoryId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.id: eq {{memoryId}}
+  res.body.status: eq ready
+}
+
+tests {
+  test("graphRef is a committed git sha", function () {
+    expect(res.getBody().graphRef).to.be.a("string").and.to.match(/^[0-9a-f]{7,40}$/);
+  });
+  test("links expose graph + query + artifacts", function () {
+    const l = res.getBody().links;
+    expect(l.graph).to.match(/\/graph$/);
+    expect(l.query).to.match(/\/query$/);
+    expect(l.artifacts).to.match(/\/artifacts$/);
+  });
+}

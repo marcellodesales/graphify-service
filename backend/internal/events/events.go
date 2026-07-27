@@ -12,9 +12,13 @@ import (
 )
 
 // Stream + subjects (spec §8.2).
+//
+// The stream captures the whole graphify.* namespace so both the single-repo
+// pipeline (graphify.repository.*) and the memory pipeline (graphify.memory.*)
+// share one JetStream stream and dedup window.
 const (
 	StreamName    = "GRAPHIFY_JOBS"
-	subjectFilter = "graphify.repository.>"
+	subjectFilter = "graphify.>"
 
 	SubjectCloneRequested = "graphify.repository.clone.requested.v1"
 	SubjectCloned         = "graphify.repository.cloned.v1"
@@ -22,12 +26,25 @@ const (
 	SubjectGraphStarted   = "graphify.repository.graph.started.v1"
 	SubjectGraphReady     = "graphify.repository.graph.ready.v1"
 	SubjectGraphFailed    = "graphify.repository.graph.failed.v1"
+
+	// Memory pipeline (multi-source unified graph). A resource is one source
+	// (git repo or uploaded file) within a memory; merge combines all resource
+	// graphs into the memory's unified graph.
+	SubjectMemoryResourceRequested = "graphify.memory.resource.requested.v1"
+	SubjectMemoryResourceReady     = "graphify.memory.resource.ready.v1"
+	SubjectMemoryResourceFailed    = "graphify.memory.resource.failed.v1"
+	SubjectMemoryMergeRequested    = "graphify.memory.merge.requested.v1"
+	SubjectMemoryMergeReady        = "graphify.memory.merge.ready.v1"
+	SubjectMemoryMergeFailed       = "graphify.memory.merge.failed.v1"
 )
 
 // Durable consumer names (spec §8.4).
 const (
 	DurableCloneWorker = "graphify-clone-workers-v1"
 	DurableGraphWorker = "graphify-graph-workers-v1"
+
+	DurableMemoryResourceWorker = "graphify-memory-resource-workers-v1"
+	DurableMemoryMergeWorker    = "graphify-memory-merge-workers-v1"
 )
 
 // RepoEventData is the non-secret payload carried by every repository event.
@@ -39,16 +56,29 @@ type RepoEventData struct {
 	Message       string `json:"message,omitempty"`
 }
 
-// CloudEvent is a minimal CloudEvents 1.0 envelope.
+// MemoryEventData is the non-secret payload carried by every memory event.
+// ResourceID is set on resource-scoped events; GraphRef carries the memory
+// repo's HEAD SHA after a merge completes.
+type MemoryEventData struct {
+	MemoryID    string `json:"memoryId"`
+	ResourceID  string `json:"resourceId,omitempty"`
+	ResolvedSHA string `json:"resolvedSha,omitempty"`
+	GraphRef    string `json:"graphRef,omitempty"`
+	Message     string `json:"message,omitempty"`
+}
+
+// CloudEvent is a minimal CloudEvents 1.0 envelope. Data is kept as raw JSON so
+// one envelope carries either a RepoEventData or a MemoryEventData payload; the
+// typed Publish/Subscribe helpers marshal and decode it.
 type CloudEvent struct {
-	SpecVersion     string        `json:"specversion"`
-	ID              string        `json:"id"`
-	Source          string        `json:"source"`
-	Type            string        `json:"type"`
-	Subject         string        `json:"subject"`
-	Time            string        `json:"time"`
-	DataContentType string        `json:"datacontenttype"`
-	Data            RepoEventData `json:"data"`
+	SpecVersion     string          `json:"specversion"`
+	ID              string          `json:"id"`
+	Source          string          `json:"source"`
+	Type            string          `json:"type"`
+	Subject         string          `json:"subject"`
+	Time            string          `json:"time"`
+	DataContentType string          `json:"datacontenttype"`
+	Data            json.RawMessage `json:"data"`
 }
 
 // Bus is a JetStream publisher/subscriber.
@@ -83,7 +113,20 @@ func Connect(url, source string) (*Bus, error) {
 }
 
 func (b *Bus) ensureStream() error {
-	if _, err := b.js.StreamInfo(StreamName); err == nil {
+	if info, err := b.js.StreamInfo(StreamName); err == nil {
+		// The stream exists. An older deploy may have created it with the narrow
+		// graphify.repository.> filter that does not capture memory subjects;
+		// widen it in place so this build's memory events are retained.
+		for _, s := range info.Config.Subjects {
+			if s == subjectFilter {
+				return nil
+			}
+		}
+		cfg := info.Config
+		cfg.Subjects = []string{subjectFilter}
+		if _, err := b.js.UpdateStream(&cfg); err != nil {
+			return fmt.Errorf("events: update stream subjects: %w", err)
+		}
 		return nil
 	}
 	_, err := b.js.AddStream(&nats.StreamConfig{
@@ -110,18 +153,33 @@ func (b *Bus) Close() {
 	}
 }
 
-// Publish emits a CloudEvent on subject. msgID is the idempotency key
+// Publish emits a repository CloudEvent on subject. msgID is the idempotency key
 // (Nats-Msg-Id) — JetStream drops duplicates within the dedup window.
 func (b *Bus) Publish(subject, msgID string, data RepoEventData) error {
+	return b.publish(subject, msgID, "repository/"+data.RepositoryID, data)
+}
+
+// PublishMemory emits a memory CloudEvent on subject. The envelope subject is
+// scoped as "memory/<memoryId>".
+func (b *Bus) PublishMemory(subject, msgID string, data MemoryEventData) error {
+	return b.publish(subject, msgID, "memory/"+data.MemoryID, data)
+}
+
+// publish marshals data into the envelope and publishes it idempotently.
+func (b *Bus) publish(subject, msgID, subjectRef string, data any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("events: encode data: %w", err)
+	}
 	ev := CloudEvent{
 		SpecVersion:     "1.0",
 		ID:              msgID,
 		Source:          b.source,
 		Type:            cloudType(subject),
-		Subject:         "repository/" + data.RepositoryID,
+		Subject:         subjectRef,
 		Time:            time.Now().UTC().Format(time.RFC3339),
 		DataContentType: "application/json",
-		Data:            data,
+		Data:            raw,
 	}
 	payload, err := json.Marshal(ev)
 	if err != nil {
@@ -133,20 +191,54 @@ func (b *Bus) Publish(subject, msgID string, data RepoEventData) error {
 	return nil
 }
 
-// Handler processes an event's data. Returning an error nak's the message for
-// redelivery; returning nil acks it.
+// Handler processes a repository event's data. Returning an error nak's the
+// message for redelivery; returning nil acks it.
 type Handler func(RepoEventData) error
 
+// MemoryHandler processes a memory event's data (same ack semantics).
+type MemoryHandler func(MemoryEventData) error
+
 // Subscribe creates (or binds) a durable push consumer on subject and invokes
-// handler for each message with explicit ack.
+// handler for each repository message with explicit ack.
 func (b *Bus) Subscribe(subject, durable string, ackWait time.Duration, handler Handler) (*nats.Subscription, error) {
+	return b.subscribe(subject, durable, ackWait, func(raw json.RawMessage) error {
+		var data RepoEventData
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return errTerm{err}
+		}
+		return handler(data)
+	})
+}
+
+// SubscribeMemory creates (or binds) a durable push consumer on subject and
+// invokes handler for each memory message with explicit ack.
+func (b *Bus) SubscribeMemory(subject, durable string, ackWait time.Duration, handler MemoryHandler) (*nats.Subscription, error) {
+	return b.subscribe(subject, durable, ackWait, func(raw json.RawMessage) error {
+		var data MemoryEventData
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return errTerm{err}
+		}
+		return handler(data)
+	})
+}
+
+// errTerm marks a decode error that must terminate (not redeliver) the message.
+type errTerm struct{ err error }
+
+func (e errTerm) Error() string { return e.err.Error() }
+
+func (b *Bus) subscribe(subject, durable string, ackWait time.Duration, decode func(json.RawMessage) error) (*nats.Subscription, error) {
 	sub, err := b.js.Subscribe(subject, func(m *nats.Msg) {
 		var ev CloudEvent
 		if err := json.Unmarshal(m.Data, &ev); err != nil {
-			_ = m.Term() // unparseable — don't redeliver
+			_ = m.Term() // unparseable envelope — don't redeliver
 			return
 		}
-		if err := handler(ev.Data); err != nil {
+		if err := decode(ev.Data); err != nil {
+			if _, ok := err.(errTerm); ok {
+				_ = m.Term() // unparseable data — poison, don't redeliver
+				return
+			}
 			_ = m.Nak()
 			return
 		}
