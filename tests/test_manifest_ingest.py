@@ -24,8 +24,11 @@ def test_manifests_classify_as_code_not_document(tmp_path):
         p = _write(tmp_path / name, "x")
         assert is_package_manifest_path(p)
         assert classify_file(p) is FileType.CODE, name
-    # a generic yaml stays a document
-    assert classify_file(_write(tmp_path / "config.yaml", "a: 1")) is FileType.DOCUMENT
+    # YAML is now CODE too: the generic structural yaml_config extractor (file +
+    # shallow top-level keys, like json_config) handles it in --code-only mode, so
+    # a YAML-only repo is non-empty and a generic yaml classifies as CODE rather
+    # than going to the LLM document pass.
+    assert classify_file(_write(tmp_path / "config.yaml", "a: 1")) is FileType.CODE
 
 
 # ── per-format parsing ───────────────────────────────────────────────────────

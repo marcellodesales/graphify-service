@@ -51,6 +51,7 @@ from graphify.extractors.rust import extract_rust  # noqa: F401
 from graphify.extractors.sln import extract_sln  # noqa: F401
 from graphify.extractors.sql import extract_sql  # noqa: F401
 from graphify.extractors.terraform import extract_terraform  # noqa: F401
+from graphify.extractors.yaml_config import extract_yaml  # noqa: F401
 from graphify.extractors.verilog import extract_verilog  # noqa: F401
 from graphify.extractors.zig import extract_zig  # noqa: F401
 from graphify.security import sanitize_metadata
@@ -3915,6 +3916,8 @@ _DISPATCH: dict[str, Any] = {
     ".tf": extract_terraform,
     ".tfvars": extract_terraform,
     ".hcl": extract_terraform,
+    ".yaml": extract_yaml,
+    ".yml": extract_yaml,
     ".dm": extract_dm,
     ".dme": extract_dm,
     ".dmi": extract_dmi,

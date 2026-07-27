@@ -1707,6 +1707,27 @@ def dispatch_command(cmd: str) -> None:
         print(f"Merged {len(graphs)} graphs -> {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges")
         print(f"Written to: {out_path}")
 
+    elif cmd == "graph-summary":
+        # graphify graph-summary <dir-or-graph.json> [--json]
+        # Human ASCII (default) or machine-readable JSON summary of a graph.json:
+        # totals, per-repo node counts, and per-community breakdown (size, spanned
+        # repos, sample labels). Reads a merged memory graph or a per-repo extract.
+        args = sys.argv[2:]
+        as_json = "--json" in args
+        positional = [a for a in args if not a.startswith("--")]
+        if len(positional) != 1:
+            print(
+                "Usage: graphify graph-summary <dir-or-graph.json> [--json]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        from graphify.graph_summary import summarize as _summarize
+        try:
+            sys.stdout.write(_summarize(positional[0], as_json=as_json))
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
     elif cmd == "clone":
         if len(sys.argv) < 3:
             print(
@@ -2123,7 +2144,8 @@ def dispatch_command(cmd: str) -> None:
                 "Usage: graphify extract <path> [--backend gemini|kimi|claude|openai|deepseek|ollama] "
                 "[--model M] [--mode deep] [--out DIR] [--google-workspace] [--no-cluster] "
                 "[--max-workers N] [--token-budget N] [--max-concurrency N] "
-                "[--api-timeout S] [--postgres DSN] [--cargo] [--allow-partial] [--timing]",
+                "[--api-timeout S] [--postgres DSN] [--cargo] [--allow-partial] [--timing] "
+                "[--decoder NAME] [--no-specialized]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -2151,6 +2173,12 @@ def dispatch_command(cmd: str) -> None:
         global_merge = False
         code_only = False
         global_repo_tag: str | None = None
+        # Repo-level specialized graph builders (VionixRepoDecoder). None = auto
+        # (classifier / self-scoring); --decoder NAME forces one; --no-specialized
+        # forces the generic AST fallback. GRAPHIFY_DECODER env is honored by
+        # select_decoder when --decoder is not given.
+        cli_decoder: str | None = None
+        cli_no_specialized: bool = False
         # Performance/tuning knobs (issue #792). None means "use library default".
         cli_max_workers: int | None = None
         cli_token_budget: int | None = None
@@ -2213,6 +2241,12 @@ def dispatch_command(cmd: str) -> None:
                 dedup_llm = True; i += 1
             elif a == "--code-only":
                 code_only = True; i += 1
+            elif a == "--decoder" and i + 1 < len(args):
+                cli_decoder = args[i + 1]; i += 2
+            elif a.startswith("--decoder="):
+                cli_decoder = a.split("=", 1)[1]; i += 1
+            elif a == "--no-specialized":
+                cli_no_specialized = True; i += 1
             elif a == "--google-workspace":
                 google_workspace = True; i += 1
             elif a == "--global":
@@ -2553,18 +2587,47 @@ def dispatch_command(cmd: str) -> None:
         # the issue #698 case — skip cleanly instead of crashing inside extract().
         ast_result: dict = {"nodes": [], "edges": [], "input_tokens": 0, "output_tokens": 0}
         if code_files:
-            from graphify.extract import extract as _ast_extract
-            # Anchor the cache at the output root, not the scanned project:
-            # with --out, a <target>/graphify-out/cache/ would leak a
-            # graphify-out/ dir into a project that asked for external output.
-            # `root` stays the scanned project so source_file/ids relativize
-            # against it; conflating the two basenamed every node (#1941).
-            ast_kwargs: dict = {"cache_root": out_root, "root": target}
+            # Repo-level decoder seam: a VionixRepoDecoder inspects the whole repo
+            # (census = the full live corpus in `files_by_type`) and returns a
+            # GraphBuilder for this run's code_files. The generic fallback issues
+            # the exact same extract() call this block used to make, so ordinary
+            # code repos are unchanged; specialized decoders (e.g. cloud-native)
+            # give IaC repos a richer structural graph. Selection honors an
+            # installed classifier, then --decoder/GRAPHIFY_DECODER, then each
+            # decoder's self-score, else generic. --no-specialized forces generic.
+            #
+            # Anchoring is unchanged: cache_root=out_root (with --out, keep
+            # graphify-out/ out of the scanned project, #1941) and root=target so
+            # source_file/ids relativize against the scanned project.
+            from graphify.decoders import build_repo_context, select_decoder
+            extract_kwargs: dict = {}
             if cli_max_workers is not None:
-                ast_kwargs["max_workers"] = cli_max_workers
-            print(f"[graphify extract] AST extraction on {len(code_files)} code files...")
+                extract_kwargs["max_workers"] = cli_max_workers
+            repo_ctx = build_repo_context(
+                root=target,
+                files_by_type=files_by_type,
+                code_files=code_files,
+                doc_files=doc_files,
+                paper_files=paper_files,
+                image_files=image_files,
+                cache_root=out_root,
+                extract_kwargs=extract_kwargs,
+            )
             try:
-                ast_result = _ast_extract(code_files, **ast_kwargs)
+                decoder = select_decoder(
+                    repo_ctx,
+                    override=cli_decoder,
+                    disable_specialized=cli_no_specialized,
+                )
+            except ValueError as exc:  # unknown --decoder name
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(2)
+            print(
+                f"[graphify extract] AST extraction on {len(code_files)} code files "
+                f"(decoder: {decoder.name})..."
+            )
+            try:
+                ast_result = decoder.builder(repo_ctx).build()
             except Exception as exc:
                 print(f"[graphify extract] AST extraction failed: {exc}", file=sys.stderr)
                 ast_result = {"nodes": [], "edges": [], "input_tokens": 0, "output_tokens": 0}
