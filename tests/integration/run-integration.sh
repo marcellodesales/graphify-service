@@ -82,6 +82,14 @@ trap cleanup EXIT
 # Fresh state + dirs the base compose bind-mounts.
 rm -rf "$ROOT/data/repos"
 mkdir -p "$ROOT/data/repos" "$ROOT/secrets/ssh"
+# The service containers run as uid 10001 (see backend/*/Dockerfile) but this
+# bind-mounted dir is created by the host user. On Linux (CI) bind mounts preserve
+# host uid/gid, so uid 10001 can't create the memories/ root inside it and the
+# stack dies with "mkdir /graphify-service/repos: permission denied". (Docker
+# Desktop on macOS masks this — mounts appear writable regardless — which is why
+# it only bites in CI.) Make the ephemeral test dir group/other-writable so the
+# container user can populate it. It's throwaway state, wiped at the next run.
+chmod 0777 "$ROOT/data/repos" 2>/dev/null || true
 
 # Inject the private deploy key into the gitignored mount (0600). The runner
 # reads it from /run/ssh/ssh_key and sends it in the add-resource body; it is
