@@ -1,0 +1,54 @@
+sequenceDiagram
+    actor Client
+    actor MCPClient as MCP Client
+    participant API as graphify-api
+    participant NATS as NATS JetStream
+    participant MemWorker as graphify-memoryworker
+    participant FS as data/memories (shared vol)
+    participant MCP as graphify-mcp (Python)
+
+    Client->>API: POST /api/v1/memories {name, description}
+    API-->>Client: 201 {memoryId}
+
+    loop For each source: git repo or uploaded file
+        Client->>API: POST /api/v1/memories/:memId/resources {url or upload}
+        API->>FS: Store.Create resource(status=queued)
+        API->>NATS: publish memory.resource.requested (MsgId: mem-resource:memId:resId)
+        API-->>Client: 202 {resourceId}
+
+        NATS->>MemWorker: deliver memory.resource.requested  [durable: resource-workers-v1]
+
+        alt git resource
+            MemWorker->>FS: IngestGit: git clone --depth 1 then graphify extract
+            FS-->>MemWorker: graphify-out/graph.json per resource
+        else file resource (PDF / docx / md)
+            MemWorker->>FS: IngestFile: graphify extract (detect + convert)
+            FS-->>MemWorker: graphify-out/graph.json per resource
+        end
+
+        MemWorker->>FS: Store.Update resource(status=ready, relPath, graphOutPath)
+        MemWorker->>NATS: publish memory.resource.ready (MsgId: mem-resource-ready:memId:resId)
+    end
+
+    note over NATS,MemWorker: when all resources are ready auto-trigger merge
+    NATS->>MemWorker: deliver memory.merge.requested  [durable: merge-workers-v1]
+
+    MemWorker->>FS: Assemble: stage each resource graph into labelled dir resourceLabel/graphify-out/graph.json
+    MemWorker->>FS: graphify merge-graphs inputs to graphify-out/graph.json (cross-source tags via grandparent dir)
+    MemWorker->>FS: Correlate: add hub nodes for shared packages, add cross-source links
+    MemWorker->>FS: graphify enrich best-effort graph.html GRAPH_REPORT.md graphml svg
+    MemWorker->>FS: git commit graphify-out/ and memory.json
+    FS-->>MemWorker: GraphRef = HEAD SHA
+    MemWorker->>FS: Store.Update memory(status=ready, graphRef=SHA, artifacts)
+    MemWorker->>NATS: publish memory.merge.ready (MsgId: mem-merge-ready:memId:sha)
+
+    Client->>API: GET /api/v1/memories/:memId
+    API-->>Client: {status=ready, graphRef, artifacts[]}
+
+    note over MCPClient,MCP: MCP query surface for vionix-engram integration tests
+    MCPClient->>MCP: docker run graphify-service -v graph.json:/graphify-service/repos/graph.json
+    note over MCP: python -m graphify.serve --transport http --host 0.0.0.0 --port 8080 --stateless --json-response /graphify-service/repos/graph.json
+    MCPClient->>MCP: HTTP POST /mcp  CallTool query_memory
+    MCPClient->>MCP: {query: what version of react is used in this project?}
+    MCP->>MCP: LLM reasoning over graph.json nodes and edges
+    MCP-->>MCPClient: react@18.2.0 declared as dependency in package.json

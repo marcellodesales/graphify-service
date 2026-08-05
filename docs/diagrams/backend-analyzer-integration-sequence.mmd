@@ -1,0 +1,54 @@
+sequenceDiagram
+    actor Client
+    participant API as graphify-api
+    participant NATS as NATS JetStream
+    participant Cloner as graphify-cloner
+    participant Worker as graphify-worker
+    participant Registry as graphify-analyzer/registry.yaml
+    participant GoAn as golang-gomod-default
+    participant NpmAn as npm-default
+    participant RustAn as rust-cargo-default
+    participant FS as data/repos (shared vol)
+
+    Client->>API: POST /api/v1/repositories {githubRepoUrl}
+    API->>FS: Store.Create writeAtomic(status=queued)
+    API->>NATS: publish clone.requested (MsgId: clone-request:id)
+    API-->>Client: 202 {id, statusUrl}
+
+    NATS->>Cloner: deliver clone.requested  [durable: clone-workers-v1]
+    Cloner->>FS: git clone --depth 1 to tmp then rename to repository/
+    Cloner->>FS: Store.Update writeAtomic(status=cloned, resolvedSha)
+    Cloner->>NATS: publish cloned (MsgId: cloned:id:sha)
+
+    NATS->>Worker: deliver cloned  [durable: graph-workers-v1]
+    Worker->>NATS: publish graph.started
+    Worker->>FS: graphify extract --code-only to graphify-out/graph.json
+
+    note over Worker,FS: proposed integration — analyzer dispatch (Issue #8)
+    Worker->>Registry: read registry.yaml to find active analyzers
+    Worker->>FS: list repo file paths to match trigger.file_patterns
+
+    par Wave 1 — parallel dispatch (analyzers with empty depends_on)
+        Worker->>GoAn: docker run --rm --network none<br/>-e REPO_NODE_ID -e REPO_SHA -e REPO_ROOT=/repo<br/>-v repo:/repo:ro golang-gomod-default
+        GoAn-->>Worker: SubGraph JSON {analyzer, phase, nodes[], edges[]}
+    and
+        Worker->>NpmAn: docker run --rm --network none<br/>-e REPO_NODE_ID -e REPO_SHA -e REPO_ROOT=/repo<br/>-v repo:/repo:ro npm-default
+        NpmAn-->>Worker: SubGraph JSON {analyzer, phase, nodes[], edges[]}
+    and
+        Worker->>RustAn: docker run --rm --network none<br/>-e REPO_NODE_ID -e REPO_SHA -e REPO_ROOT=/repo<br/>-v repo:/repo:ro rust-cargo-default
+        RustAn-->>Worker: SubGraph JSON {analyzer, phase, nodes[], edges[]}
+    end
+
+    Worker->>FS: graphify merge-graphs SubGraphs + extract graph to unified graph.json
+    note over Worker,FS: end proposed integration
+
+    Worker->>FS: graphify enrich best-effort graph.html GRAPH_REPORT.md graphml svg
+    Worker->>FS: artifacts.Inventory then Store.Update writeAtomic(status=ready, artifacts)
+    Worker->>NATS: publish graph.ready (MsgId: graph-ready:id:sha)
+
+    loop poll until status=ready
+        Client->>API: GET /api/v1/repositories/{id}
+        API-->>Client: {status, artifacts}
+    end
+    Client->>API: GET /api/v1/repositories/{id}/download?format=zip
+    API-->>Client: zip archive of graphify-out/

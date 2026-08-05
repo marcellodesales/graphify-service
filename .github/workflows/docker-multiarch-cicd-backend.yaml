@@ -27,6 +27,7 @@ on:
     branches:
       - main
       - develop
+      - vionix/main
     tags:
       - 'v*'
     paths:
@@ -37,6 +38,12 @@ on:
       - 'backend/go.sum'
       - 'docker-compose*'
       - '.dockerignore'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual trigger'
+        required: false
+        default: 'manual build'
 
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKER_REGISTRY_USERNAME }}

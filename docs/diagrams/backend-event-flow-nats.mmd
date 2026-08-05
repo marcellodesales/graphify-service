@@ -1,0 +1,80 @@
+%%{init: {"theme": "base"}}
+%%
+flowchart LR
+    Client(["HTTP Client"])
+    MCPClient(["MCP Client"])
+
+    subgraph api["graphify-api  ·  Go"]
+        direction TB
+        ApiRepo["POST /api/v1/repositories\n→ Store.Create (status=queued)\n→ publish clone.requested"]
+        ApiMem["POST /api/v1/memories/:id/resources\n→ publish memory.resource.requested"]
+        ApiGet["GET /api/v1/repositories/:id\nGET /api/v1/memories/:id"]
+    end
+
+    subgraph nats["NATS JetStream  ·  stream: GRAPHIFY_JOBS  ·  subjects: graphify.*  ·  24 h retention  ·  5 min dedup  ·  max 5 deliveries"]
+        direction TB
+        subgraph repo_pipe["── repository pipeline ──"]
+            direction TB
+            rq("graphify.repository.clone.requested.v1")
+            rd("graphify.repository.cloned.v1")
+            rgs("graphify.repository.graph.started.v1")
+            rgr("graphify.repository.graph.ready.v1")
+            rgf("graphify.repository.graph.failed.v1")
+        end
+        subgraph mem_pipe["── memory pipeline ──"]
+            direction TB
+            mrq("graphify.memory.resource.requested.v1")
+            mrr("graphify.memory.resource.ready.v1")
+            mmq("graphify.memory.merge.requested.v1")
+            mmr("graphify.memory.merge.ready.v1")
+            mmf("graphify.memory.merge.failed.v1")
+        end
+    end
+
+    subgraph cloner["graphify-cloner  ·  Go\ndurable consumer: graphify-clone-workers-v1"]
+        cl["git clone --depth 1 → tmp → rename\nStore.Update(status=cloned, resolvedSha)"]
+    end
+
+    subgraph worker["graphify-worker  ·  Go + graphify Python runtime\ndurable consumer: graphify-graph-workers-v1"]
+        w1["graphify extract --code-only → graphify-out/graph.json"]
+        w2["graphify enrich (best-effort)\n→ graph.html · GRAPH_REPORT.md · graphml · svg"]
+        w3["artifacts.Inventory\nStore.Update(status=ready, artifacts)"]
+    end
+
+    subgraph memworker["graphify-memoryworker  ·  Go + graphify Python runtime\nresource consumer: graphify-memory-resource-workers-v1\nmerge consumer:    graphify-memory-merge-workers-v1"]
+        mw1["IngestGit → git clone + graphify extract\nIngestFile → graphify extract"]
+        mw2["Assemble\n  graphify merge-graphs (per-source staging with labels)\n  Correlate (cross-source hub nodes + shared-package links)\n  graphify enrich (best-effort)\ngit commit graphify-out/ → GraphRef SHA"]
+    end
+
+    repos_fs[("data/repos/id/\ngraphify-out/graph.json")]
+    mem_fs[("data/memories/id/\ngraphify-out/graph.json\n+ git repo (GraphRef)")]
+
+    mcp["graphify-mcp  ·  Python\ngraphify serve --transport http\n--json-response graph.json\ntools: query_memory"]
+
+    Client -->|"POST /api/v1/repositories"| ApiRepo
+    ApiRepo -->|"publish CloudEvent\nMsgId: clone-request:id"| rq
+    rq -->|"durable consume"| cl
+    cl -->|"publish MsgId: cloned:id:sha"| rd
+    cl -->|"on clone error"| rgf
+
+    rd -->|"durable consume"| w1
+    w1 --> w2 --> w3
+    w3 --> repos_fs
+    worker -->|"publish graph.started"| rgs
+    w3 -->|"publish MsgId: graph-ready:id:sha"| rgr
+    w3 -->|"on extract error"| rgf
+
+    Client -->|"GET /api/v1/repositories/:id"| ApiGet
+
+    Client -->|"POST /api/v1/memories/:id/resources"| ApiMem
+    ApiMem -->|"publish MsgId: mem-resource:memId:resId"| mrq
+    mrq -->|"durable consume"| mw1
+    mw1 -->|"publish MsgId: mem-resource-ready:memId:resId"| mrr
+    mrr -->|"when all resources ready\nauto-trigger merge"| mmq
+    mmq -->|"durable consume"| mw2
+    mw2 --> mem_fs
+    mw2 -->|"publish MsgId: mem-merge-ready:memId:sha"| mmr
+    mw2 -->|"on error"| mmf
+
+    MCPClient -->|"HTTP /mcp\nCallTool query_memory"| mcp
+    mcp -.->|"reads graph.json"| mem_fs

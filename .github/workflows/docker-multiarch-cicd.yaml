@@ -21,6 +21,7 @@ on:
     branches:
       - main
       - develop
+      - vionix/main
     tags:
       - 'v*'
     # Python engine only. Deliberately NOT triggered by docker-compose*/backend
@@ -33,6 +34,13 @@ on:
       - 'pytest.ini'
       - '**.py'
       - 'Dockerfile'
+      - '.github/workflows/docker-multiarch-cicd.yaml'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual trigger'
+        required: false
+        default: 'manual build'
 
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
@@ -78,4 +86,3 @@ jobs:
       dockerhub-registry-username: ${{ needs.setup.outputs.dockerhub-username }}
       dockerhub-registry-token: ${{ needs.setup.outputs.dockerhub-token }}
       push-attestations: "false"
-
